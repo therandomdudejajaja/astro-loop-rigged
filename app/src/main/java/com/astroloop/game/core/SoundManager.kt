@@ -4,7 +4,10 @@ import android.content.Context
 import android.media.AudioAttributes
 import android.media.MediaPlayer
 import android.media.SoundPool
+import android.os.Handler
+import android.os.HandlerThread
 import android.util.Log
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Singleton managing all game audio.
@@ -31,7 +34,39 @@ object SoundManager {
     var volumeSfxUi: Float = 0.8f        // was 0.25 — UI baked to −18 LUFS
     var volumeSfxRadio: Float = 0.8f     // was 0.25 — radio baked to −18 LUFS
 
-    private const val DEBUG_BGM_VOLUME = 0.25f
+    /**
+     * Call volume for the heart-to-heart / desert-farewell typewriter tick.
+     *
+     * It lives here, beside the two category volumes above, because it is the same kind of number
+     * and it was missed for exactly that reason. When the February normalization pass (84c3a2fb)
+     * re-baked the library quieter, the compensation was applied to the *category* volumes — that
+     * is what the two "was 0.25" comments above record. `sfx_text_tick` is not in either category
+     * (it falls to [volumeSfxCombat], which stayed at 1.0), and its trim was instead hardcoded as
+     * `0.15f` at two call sites in GameSurfaceView. It got the quieter bake and none of the
+     * compensation.
+     *
+     * Measured: the sample's peak went −5.7 dB → −15.8 dB in that pass, a 10.1 dB drop. At the old
+     * 0.15 trim that put its effective peak at −32.3 dB, under `bgm_heart_to_heart` — roughly 11 dB
+     * below the next quietest thing in the game, and inaudible on device. Every other quiet sample
+     * (ui_swipe at −19.0, slot_win at −18.5) is played at full call volume; the typewriter was the
+     * only one attenuated at its call site.
+     *
+     * 0.5 restored the effective level the 0.15 was originally chosen to produce (−21.8 dB versus
+     * −22.2 dB before the re-bake) — and on device that was still too quiet: audible, but drowned
+     * by `bgm_heart_to_heart` (owner, 2026-09-03). So the pre-re-bake mix was itself wrong against
+     * this scene's music; restoring history was never going to be enough.
+     *
+     * 1.0 puts the effective peak at −15.8 dB, level with `sfx_ui_upgrade_select` (−15.0 dB), the
+     * loudest of the library's quiet samples. No clipping headroom is at risk: the sample peaks
+     * 15.8 dB below full scale and [volumeSfxCombat] is 1.0, so the product cannot reach unity.
+     *
+     * **This is the ceiling for this lever** — `playSFX` coerces volume into 0f..1f, so there is
+     * nothing above 1.0 here. If the tick ever needs to be louder still, the next moves are a
+     * hotter re-bake of the sample or ducking the ambient bed under the scene, not this constant.
+     * If the sample is re-baked, recompute from its measured peak rather than nudging by ear.
+     */
+    const val TEXT_TICK_VOLUME = 1.0f
+
     // The menu tap is mixed hot relative to the other UI sounds — trim it to 30%.
     private const val TAP_VOLUME_MULT = 0.3f
 
@@ -61,38 +96,73 @@ object SoundManager {
     var isMuted: Boolean = false
         private set
 
-    // ── Debug BGM state (tuning page) ──────────────────────────────────
-    private var bgmMutedForDebug = false
-    private var debugBgmPlayer: MediaPlayer? = null
-
-    private val weaponCooldownMs = mapOf(
-        "energy_saw" to 100L, "needle_gun" to 250L, "pulse_cannon" to 500L,
-        "flak_cannon" to 1000L, "scatter_shot" to 1000L, "homing_missiles" to 1000L,
-        "railgun" to 2000L, "solar_storm" to 2000L, "cluster_bomb" to 2000L,
-        "space_mines" to 2000L, "nova_blast" to 4000L,
-        // Evolutions (inherit base weapon cooldown)
-        "storm_cannon" to 500L, "warp_saw" to 100L, "leech_burst" to 1000L,
-        "autonomous_ace" to 1000L, "oblivion_beam" to 2000L,
-        "jackpot_mines" to 2000L, "phoenix_flare" to 2000L, "lingering_nova" to 4000L,
-        "siphon_needles" to 250L, "hunter_killer" to 2000L, "flak_barrage" to 1000L
-    )
-    private val weaponPhaseOffsetMs = mapOf(
-        "scatter_shot" to 500L, "homing_missiles" to 250L,
-        "solar_storm" to 500L, "cluster_bomb" to 1000L,
-        "space_mines" to 1500L, "nova_blast" to 2000L
-    )
-
     // ── Internal state ─────────────────────────────────────────────────
     private var initialized = false
     private var appContext: Context? = null
 
     // SoundPool for one-shot SFX
     private var soundPool: SoundPool? = null
-    private val sfxIds = mutableMapOf<String, Int>()       // eventId → SoundPool sound id
-    private val sfxLoaded = mutableSetOf<Int>()             // sound ids confirmed loaded
+    // Concurrent, not plain collections.
+    //
+    // init() spawns a background thread that loads 39 sounds, writing sfxIds as each lands, while
+    // SoundPool's load-complete callback writes sfxLoaded and drains pendingPlays on a third
+    // thread. playSFX reads all of them from the game thread, the UI thread and the hangar's
+    // render thread — and the hangar is already interactive and playing tap sounds during that
+    // window. A plain HashMap growing to 39 entries rehashes several times in exactly that
+    // window, and a read mid-rehash is where unsafe maps return garbage or worse.
+    //
+    // The window is only the first seconds after launch; once loading finishes these are
+    // read-only and were always safe. It is cheap to close anyway.
+    private val sfxIds = ConcurrentHashMap<String, Int>()       // eventId → SoundPool sound id
+    private val sfxLoaded = ConcurrentHashMap.newKeySet<Int>()  // sound ids confirmed loaded
     // Pending plays: queued when playSFX is called before a sound finishes loading
     private data class PendingPlay(val volume: Float, val rate: Float, val categoryVolume: Float)
-    private val pendingPlays = mutableMapOf<Int, PendingPlay>()  // soundId → play params
+    // Written from playSFX on the caller's thread AND removed from on SoundPool's load-complete
+    // thread — a genuine two-writer case, the worst of the three.
+    private val pendingPlays = ConcurrentHashMap<Int, PendingPlay>()  // soundId → play params
+
+    /**
+     * Minimum gap between two plays of the same event id.
+     *
+     * Ten enemies firing the same weapon in one frame asked the pool for ten voices of one sound —
+     * ten synchronous play() calls on the game thread, for an effect the ear hears as one shot with
+     * a smear on it. Those ten calls all land inside a single `update()`, microseconds apart, so
+     * the window only has to be wide enough to cover one frame.
+     *
+     * It was 40ms, and that silenced the heart-to-heart typewriter.
+     *
+     * The original reasoning — "40ms allows 25 distinct plays a second, far above the fastest
+     * weapon cooldown" — checked weapons and missed the typewriter, which is the fastest
+     * intentional repeat in the game at exactly one tick per 0.04s. That is not "far above" the
+     * window, it *is* the window. The accumulator in `updateHeartToHeart` resets to zero on each
+     * tick, discarding the overshoot, so consecutive ticks are separated by exactly 40ms whenever
+     * the frame period divides 40 evenly — which it does, since [GameConfig.FRAME_TIME_MS] is
+     * `1000L / 120` = 8. That leaves a margin of zero. The gap actually measured is between two
+     * `System.currentTimeMillis()` samples taken inside `update()`, and it drifts by a fraction of
+     * a millisecond with how much work each frame did before reaching the tick — so a large share
+     * of ticks measured 39 and were dropped, in the middle of the story's climax.
+     *
+     * 16ms is at least one frame at the 120fps budget (and covers a slow update() spreading a
+     * volley across several milliseconds), while leaving 24ms of headroom under the typewriter.
+     * The invariant to keep: **this must stay well under the fastest cadence any caller actually
+     * intends**, not merely under the fastest one somebody remembered to check.
+     * `SfxCoalesceTest` pins both halves.
+     */
+    internal const val SFX_COALESCE_MS = 16L
+
+    /** The fastest intentional repeat in the game: the heart-to-heart typewriter, one per 0.04s. */
+    internal const val FASTEST_INTENTIONAL_REPEAT_MS = 40L
+
+    // SoundPool.play() is a synchronous hop into the audio server. On the game thread that is a
+    // frame-time cost paid per voice, per frame. The queue owns it instead.
+    // @Volatile: written on the init thread, read from the game and render threads on every
+    // playSFX. Same hazard class as the maps above, same fix.
+    @Volatile private var audioThread: HandlerThread? = null
+    @Volatile private var audioHandler: Handler? = null
+    // Concurrent, not a plain map: playSFX is called from the game thread AND the UI thread (the
+    // hangar's taps and the cabinet both go through it), so an unsynchronized HashMap here can
+    // corrupt under a resize.
+    private val lastPlayedAtMs = java.util.concurrent.ConcurrentHashMap<String, Long>()
 
     // Ambient MediaPlayers (dual-player for gapless looping)
     private var ambientCurrent: MediaPlayer? = null
@@ -109,8 +179,10 @@ object SoundManager {
     // Boss fight BGM
     private var bossPlayer: MediaPlayer? = null
 
-    // Boss/reckoning BGM target level. setMuted and the reckoning duck both go through
-    // this so a mute/unmute during the ducked ghost scene can't snap the volume back up.
+    // Boss/reckoning BGM target level, read by setMuted and the fade-out so neither has to
+    // guess what the track was playing at. It was also the reckoning's duck target, under a
+    // ghost scene stage 3 deleted; nothing lowers it now, but it stays because mute and fade
+    // both still need to know the level.
     private var bossPlayerVolume = 0.7f
 
     // Intro swell — a ~10s musical sting. Played via MediaPlayer, not SoundPool: SoundPool
@@ -119,7 +191,10 @@ object SoundManager {
     private var introSwellPlayer: MediaPlayer? = null
 
     // ── All known SFX event IDs ────────────────────────────────────────
-    private val allSfxEventIds = listOf(
+    // `internal`, not private: CabinetCueRegistrationTest crosses from the cabinet's cues to
+    // this registry, which is the only place the two halves meet. An id missing here is a
+    // silent no-op — playSFX returns on `sfxIds[eventId] ?: return` — and that shipped once.
+    internal val allSfxEventIds = listOf(
         // Hangar (loaded first — launch is the earliest possible player action)
         // NOTE: sfx_intro_swell is intentionally NOT here — it's ~10s, which exceeds
         // SoundPool's ~1MB sample cap. It plays via MediaPlayer (playIntroSwell).
@@ -155,9 +230,19 @@ object SoundManager {
         "sfx_tank_shot", "sfx_desert_enemy_gun",
         // Crystal reveal + fleet
         "sfx_crystal_glow", "sfx_crystal_orb",
-        // Crystal reckoning (finale events)
-        "sfx_reckoning_bullet",
-        "sfx_ghost_lance", "sfx_crystal_shatter"
+        // BELT RUN cabinet — 1979-idiom square waves and noise bursts, not the main game's SFX.
+        "sfx_belt_fire",
+        "sfx_belt_break_lge",
+        "sfx_belt_break_med",
+        "sfx_belt_break_sml",
+        "sfx_belt_death",
+        "sfx_belt_coin",
+        "sfx_belt_beat_lo",
+        "sfx_belt_beat_hi",
+        // The crystal, in the machine's own idiom — decision 98.
+        "sfx_belt_crystal_fire",
+        "sfx_belt_crystal_hit",
+        "sfx_belt_crystal_shatter"
     )
 
     // ── Volume category routing ────────────────────────────────────────
@@ -194,119 +279,12 @@ object SoundManager {
             setPlayerVolume(ambientFadingOut, 0f)
             setPlayerVolume(combatPlayer, 0f)
             bossPlayer?.setVolume(0f, 0f)
-            setPlayerVolume(debugBgmPlayer, 0f)
         } else {
             setPlayerVolume(ambientCurrent, volumeAmbient)
             setPlayerVolume(ambientNext, volumeAmbient)
             setPlayerVolume(combatPlayer, volumeAmbient)
             bossPlayer?.setVolume(bossPlayerVolume, bossPlayerVolume)
-            setPlayerVolume(debugBgmPlayer, DEBUG_BGM_VOLUME)
         }
-    }
-
-    // ── Debug BGM controls (tuning page) ────────────────────────────────
-
-    fun muteBGMForDebug() {
-        bgmMutedForDebug = true
-        combatPlayer?.let { setPlayerVolume(it, 0f) }
-        ambientCurrent?.let { setPlayerVolume(it, 0f) }
-        ambientNext?.let { setPlayerVolume(it, 0f) }
-    }
-
-    fun unmuteBGMForDebug() {
-        bgmMutedForDebug = false
-        combatPlayer?.let { setPlayerVolume(it, if (isMuted) 0f else volumeAmbient) }
-        ambientCurrent?.let { setPlayerVolume(it, if (isMuted) 0f else volumeAmbient) }
-        ambientNext?.let { setPlayerVolume(it, if (isMuted) 0f else volumeAmbient) }
-    }
-
-    fun playDebugBGM(context: Context, setName: String) {
-        stopDebugBGM()
-        val resName = "bgm_${setName}_combat_loop"
-        val resId = context.resources.getIdentifier(resName, "raw", context.packageName)
-        if (resId == 0) { Log.d(TAG, "Debug BGM not found: $resName"); return }
-        try {
-            debugBgmPlayer = MediaPlayer.create(context, resId)?.apply {
-                isLooping = true
-                val vol = if (isMuted) 0f else DEBUG_BGM_VOLUME
-                setVolume(vol, vol)
-                start()
-            }
-            beatClock.start(System.currentTimeMillis())
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to play debug BGM: $resName", e)
-        }
-    }
-
-    fun stopDebugBGM() {
-        debugBgmPlayer?.let { fadeOutAndRelease(it) }
-        debugBgmPlayer = null
-        beatClock.stop()
-    }
-
-    // ── Tuning page auto-play ─────────────────────────────────────────
-    // weaponId → Pair(volButtonIndex 0-10, offsetButtonIndex 0-10)
-    val tuningAutoPlay = mutableMapOf<String, Pair<Int, Int>>()
-    private val tuningNextFire = mutableMapOf<String, Long>()
-
-    private val TUNING_VOL_MULTIPLIERS = floatArrayOf(
-        0.50f, 0.60f, 0.70f, 0.80f, 0.90f, 1.00f, 1.10f, 1.20f, 1.40f, 1.60f, 2.00f
-    )
-    private val TUNING_OFFSET_MS = longArrayOf(
-        -125L, -100L, -75L, -50L, -25L, 0L, 25L, 50L, 75L, 100L, 125L
-    )
-
-    fun getTuningVolume(buttonIndex: Int): Float = 0.5f * TUNING_VOL_MULTIPLIERS[buttonIndex.coerceIn(0, 10)]
-    fun getTuningOffsetMs(buttonIndex: Int): Long = TUNING_OFFSET_MS[buttonIndex.coerceIn(0, 10)]
-
-    fun toggleTuningAutoPlay(weaponId: String, volIndex: Int, offsetIndex: Int) {
-        if (tuningAutoPlay.containsKey(weaponId)) {
-            tuningAutoPlay.remove(weaponId)
-            tuningNextFire.remove(weaponId)
-        } else {
-            tuningAutoPlay[weaponId] = Pair(volIndex, offsetIndex)
-            val cooldown = weaponCooldownMs[weaponId] ?: 500L
-            val phaseOffset = weaponPhaseOffsetMs[weaponId] ?: 0L
-            val timingOffset = getTuningOffsetMs(offsetIndex)
-            val now = System.currentTimeMillis()
-            val delay = if (beatClock.isRunning) beatClock.msUntilNextSubdivision(cooldown, now, phaseOffset) else 0L
-            tuningNextFire[weaponId] = now + delay + timingOffset
-        }
-    }
-
-    fun updateTuningSettings(weaponId: String, volIndex: Int, offsetIndex: Int) {
-        if (tuningAutoPlay.containsKey(weaponId)) {
-            val oldOffset = tuningAutoPlay[weaponId]!!.second
-            tuningAutoPlay[weaponId] = Pair(volIndex, offsetIndex)
-            // Recalculate next fire time when offset changes
-            if (oldOffset != offsetIndex) {
-                val cooldown = weaponCooldownMs[weaponId] ?: 500L
-                val phaseOffset = weaponPhaseOffsetMs[weaponId] ?: 0L
-                val timingOffset = getTuningOffsetMs(offsetIndex)
-                val now = System.currentTimeMillis()
-                val delay = if (beatClock.isRunning) beatClock.msUntilNextSubdivision(cooldown, now, phaseOffset) else 0L
-                tuningNextFire[weaponId] = now + delay + timingOffset
-            }
-        }
-    }
-
-    fun updateTuningAutoPlay() {
-        if (!beatClock.isRunning || tuningAutoPlay.isEmpty()) return
-        val now = System.currentTimeMillis()
-        for ((weaponId, settings) in tuningAutoPlay) {
-            val nextFire = tuningNextFire[weaponId] ?: continue
-            if (now >= nextFire) {
-                val volume = getTuningVolume(settings.first)
-                playSFX("sfx_weapon_$weaponId", volume, 1.0f, isSoundboard = true)
-                val cooldown = weaponCooldownMs[weaponId] ?: 500L
-                tuningNextFire[weaponId] = nextFire + cooldown
-            }
-        }
-    }
-
-    fun clearTuningAutoPlay() {
-        tuningAutoPlay.clear()
-        tuningNextFire.clear()
     }
 
     // ── Initialization ─────────────────────────────────────────────────
@@ -333,6 +311,9 @@ object SoundManager {
             .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
             .build()
 
+        audioThread = HandlerThread("astroloop-sfx").also { it.start() }
+        audioHandler = Handler(audioThread!!.looper)
+
         soundPool = SoundPool.Builder()
             .setMaxStreams(MAX_STREAMS)
             .setAudioAttributes(audioAttributes)
@@ -346,7 +327,13 @@ object SoundManager {
                             // Re-asked on arrival: the mode may have changed while it loaded.
                             if (!audioMode.effectsSilenced) {
                                 val vol = (pending.volume * pending.categoryVolume).coerceIn(0f, 1f)
-                                pool.play(sampleId, vol, vol, 1, 0, pending.rate.coerceIn(0.5f, 2.0f))
+                                val rate = pending.rate.coerceIn(0.5f, 2.0f)
+                                val handler = audioHandler
+                                if (handler != null) {
+                                    handler.post { pool.play(sampleId, vol, vol, 1, 0, rate) }
+                                } else {
+                                    pool.play(sampleId, vol, vol, 1, 0, rate)
+                                }
                             }
                         }
                     }
@@ -394,6 +381,20 @@ object SoundManager {
      * @param volume   Per-call volume multiplier (0.0–1.0), combined with category volume
      * @param rate     Playback rate (0.5–2.0)
      */
+    /**
+     * Whether this play of [eventId] at [now] falls inside [SFX_COALESCE_MS] of the last one, and
+     * should therefore be dropped as a duplicate. Records [now] as the last play when it does not.
+     *
+     * Extracted from [playSFX] so the window can be tested without standing up a SoundPool — the
+     * bug this guards against is entirely a question of arithmetic on timestamps.
+     */
+    internal fun isCoalescedDuplicate(eventId: String, now: Long): Boolean {
+        val last = lastPlayedAtMs[eventId]
+        if (last != null && now - last < SFX_COALESCE_MS) return true
+        lastPlayedAtMs[eventId] = now
+        return false
+    }
+
     fun playSFX(eventId: String, volume: Float = 1.0f, rate: Float = 1.0f, isSoundboard: Boolean = false) {
         // isMuted now tracks the music, which may be silenced while the fight is not — so the SFX
         // gate reads the two dedicated flags instead of riding on it.
@@ -412,9 +413,18 @@ object SoundManager {
             return
         }
 
+        if (isCoalescedDuplicate(eventId, System.currentTimeMillis())) return
+
         val weaponMult = if (!isSoundboard && eventId.startsWith("sfx_weapon_")) weaponVolume else 1f
         val finalVolume = (perSoundVolume * categoryVolume * weaponMult).coerceIn(0f, 1f)
-        pool.play(soundId, finalVolume, finalVolume, 1, 0, rate.coerceIn(0.5f, 2.0f))
+        val playbackRate = rate.coerceIn(0.5f, 2.0f)
+        val handler = audioHandler
+        if (handler != null) {
+            handler.post { pool.play(soundId, finalVolume, finalVolume, 1, 0, playbackRate) }
+        } else {
+            // No audio thread (release() has run, or a test): play inline rather than drop it.
+            pool.play(soundId, finalVolume, finalVolume, 1, 0, playbackRate)
+        }
     }
 
     // ── Ambient (single track, e.g. hangar) ────────────────────────────
@@ -585,9 +595,6 @@ object SoundManager {
 
     fun startBossBGM(context: Context) = startBossTrack(context, "bgm_boss")
 
-    /** Crystal Reckoning BGM — same player lifecycle as the boss track, its own bake. */
-    fun startReckoningBGM(context: Context) = startBossTrack(context, "bgm_reckoning")
-
     private fun startBossTrack(context: Context, resName: String) {
         // This can run on a boss-spawn frame before any fight phase is set, and GameThread
         // swallows anything update() throws — a throw here permanently freezes the scripted
@@ -620,14 +627,6 @@ object SoundManager {
         beatClock.start(System.currentTimeMillis())
     }
 
-    /**
-     * Duck the boss/reckoning BGM to an absolute level — the reckoning win strips to the
-     * bare bed under the ghost dialogue. Sticky across mute/unmute via bossPlayerVolume.
-     */
-    fun duckBossBGM(volume: Float) {
-        bossPlayerVolume = volume
-        bossPlayer?.let { setPlayerVolume(it, volume) }
-    }
 
     /** Fade the boss/reckoning BGM out and release it — the shatter kills the beat. */
     fun fadeOutBossBGM() {
@@ -672,7 +671,6 @@ object SoundManager {
         try { ambientCurrent?.setNextMediaPlayer(null) } catch (_: Exception) {}
         combatPlayer?.let { if (it.isPlaying) it.pause() }
         bossPlayer?.let { if (it.isPlaying) it.pause() }
-        debugBgmPlayer?.let { if (it.isPlaying) it.pause() }
         introSwellPlayer?.let { if (it.isPlaying) it.pause() }
         soundPool?.autoPause()
     }
@@ -694,7 +692,6 @@ object SoundManager {
         }
         if (combatActive) combatPlayer?.start()
         bossPlayer?.start()
-        debugBgmPlayer?.start()
         try { introSwellPlayer?.start() } catch (_: Exception) {}
         soundPool?.autoResume()
     }
@@ -705,8 +702,6 @@ object SoundManager {
     fun stopAll() {
         stopAmbient()
         stopCombatMusic()
-        stopDebugBGM()
-        clearTuningAutoPlay()
         introSwellPlayer?.let { fadeOutAndRelease(it, fromVolume = 1f, fadeOutMillis = 400) }
         introSwellPlayer = null
         // SoundPool streams stop when pool is paused/destroyed
@@ -738,10 +733,10 @@ object SoundManager {
         introSwellPlayer?.release()
         introSwellPlayer = null
 
-        debugBgmPlayer?.release()
-        debugBgmPlayer = null
-        bgmMutedForDebug = false
-        clearTuningAutoPlay()
+        audioHandler = null
+        audioThread?.quitSafely()
+        audioThread = null
+        lastPlayedAtMs.clear()
 
         soundPool?.release()
         soundPool = null

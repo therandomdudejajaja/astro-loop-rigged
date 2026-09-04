@@ -6,18 +6,24 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.Shader
+import com.astroloop.game.cabinet.CabinetBezelRenderer
+import com.astroloop.game.cabinet.CabinetMarqueeDrift
+import com.astroloop.game.cabinet.CabinetRenderer
+import com.astroloop.game.cabinet.CabinetSim
 import com.astroloop.game.core.AudioMode
 import com.astroloop.game.core.GameConfig
 import com.astroloop.game.core.LayoutRect
 import com.astroloop.game.core.StoryStateManager
 import com.astroloop.game.data.CrystalCardBack
 import com.astroloop.game.data.PersistenceManager
+import com.astroloop.game.data.SlotOdds
 import com.astroloop.game.data.StoreUpgradeDefinitions
 import com.astroloop.game.render.CrystalOrbPath
 import com.astroloop.game.render.CrystalPalette
 import com.astroloop.game.render.FontManager
 import com.astroloop.game.render.IconCache
 import com.astroloop.game.render.TextWrap
+import com.astroloop.game.system.CrystalReckoning
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.math.PI
 import kotlin.math.cos
@@ -80,7 +86,22 @@ class StorePageRenderer(
 
     lateinit var drawRoomFrame: (Canvas, Boolean, Boolean, Boolean) -> Unit
 
-    fun draw(canvas: Canvas, state: HangarState, xOffset: Float) {
+    /**
+     * [bezelSim]/[bezelRenderer] are the store page's own attract demo — see
+     * HangarSurfaceView's bezelSim doc comment. [marqueeDrift] is the marquee plate's
+     * ambient rock drift, owned the same way. All threaded through as parameters, the
+     * same way [state] itself flows from HangarRenderer.render() down to here, rather
+     * than living on StorePageRenderer as fields: this class only ever draws what it's
+     * handed, and these demos' lifecycles belong to HangarSurfaceView, not to a renderer.
+     */
+    fun draw(
+        canvas: Canvas,
+        state: HangarState,
+        xOffset: Float,
+        bezelSim: CabinetSim? = null,
+        bezelRenderer: CabinetRenderer? = null,
+        marqueeDrift: CabinetMarqueeDrift? = null
+    ) {
         canvas.save()
         canvas.translate(-xOffset, 0f)
         // Clip to this room, exactly as the shipyard page does: nothing the shop draws may reach
@@ -275,7 +296,11 @@ class StorePageRenderer(
         val margin = rw * 0.1f
         val walkable = rw * 0.8f
         val storeTargetX = margin + 0.1f * walkable
-        drawMiniSlotMachine(canvas, storeTargetX, walkwayY)
+        if (StoryStateManager.isAstroLoop(persistence)) {
+            CabinetBezelRenderer.drawWalkwayMini(canvas, storeTargetX, walkwayY)
+        } else {
+            drawMiniSlotMachine(canvas, storeTargetX, walkwayY)
+        }
 
         // Corrupted Astro at slot machine (auto-gambling during corruption)
         if (state.astroAtSlotMachine) {
@@ -355,7 +380,7 @@ class StorePageRenderer(
         }
 
         // Slot machine below walkway
-        drawSlotMachine(canvas, state)
+        drawSlotMachine(canvas, state, bezelSim, bezelRenderer, marqueeDrift)
 
         // Reset paints
         textPaint.color = 0xFFFFFFFF.toInt()
@@ -984,6 +1009,22 @@ class StorePageRenderer(
 
         private val SYMBOL_NAMES = arrayOf("yen", "star", "diamond", "rocket", "bolt", "gear")
         fun getSymbolName(index: Int): String = SYMBOL_NAMES.getOrElse(index) { "?" }
+
+        /**
+         * The PAYOUTS panel, derived from [SlotOdds.CASH_TIERS] instead of written out.
+         *
+         * These numbers were hardcoded and went stale when the casino rebalance (#23) changed every
+         * cash payout: the panel advertised 2000/700/100/75/50 while the machine actually paid
+         * 750/300/100/50/20. Deriving them means the sign over the machine cannot lie about it
+         * again. Order matters and is load-bearing — CASH_TIERS runs diamond, star, yen, bolt,
+         * wrench, and [PAYOUT_SYMBOLS] lists those same five after the jackpot, so row i of one
+         * describes row i of the other. SlotPayoutPanelTest pins that pairing; reordering
+         * CASH_TIERS without reordering here fails it rather than quietly mislabelling the panel.
+         */
+        val PAYOUT_SYMBOLS = listOf(SYM_ROCKET, SYM_DIAMOND, SYM_STAR, SYM_YEN, SYM_BOLT, SYM_WRENCH)
+
+        /** Labels for [PAYOUT_SYMBOLS]. The jackpot's prize varies, so it reads BONUS, not a number. */
+        val PAYOUT_VALUES: List<String> = listOf("BONUS") + SlotOdds.CASH_TIERS.map { it.second.toString() }
     }
 
     var spinButtonRect = RectF()
@@ -1030,10 +1071,39 @@ class StorePageRenderer(
         fillPaint.alpha = 255
     }
 
-    private fun drawSlotMachine(canvas: Canvas, state: HangarState) {
+    private fun drawSlotMachine(
+        canvas: Canvas,
+        state: HangarState,
+        bezelSim: CabinetSim?,
+        bezelRenderer: CabinetRenderer?,
+        marqueeDrift: CabinetMarqueeDrift? = null
+    ) {
+        // The slot machine and BELT RUN share this method's geometry exactly (see
+        // CabinetBezelRenderer's doc comment) — this flag only ever changes what is drawn
+        // inside each zone below, never where a zone's rect is computed.
+        val isCabinet = StoryStateManager.isAstroLoop(persistence)
         storeButtonRects.clear()
 
         val time = System.currentTimeMillis()
+
+        // Decision 84: once the gate is open the crystal is taking the machine over, and it
+        // has to be visible from the walkway — before the 100Y door, before PLAY. Until this
+        // existed, nothing on the cabinet told a cleared board from an uncleared one, so a
+        // player who had just cleared their twelfth pilot pressed PLAY and fell into the
+        // ending with no warning — the undiscoverable-finale complaint in a new place.
+        //
+        // Read through CrystalReckoning rather than re-derived from the score table, so the
+        // machine glitches under exactly the condition PLAY branches on. Null means the gate
+        // is shut and every surface below early-outs, drawing precisely what it drew before.
+        //
+        // The `isCabinet &&` short-circuits, so the slot machine performs no extra read at
+        // all. The cabinet's own per-frame persistence read is the idiom already in use —
+        // HangarSurfaceView.renderCabinet reads twelve arcade scores plus three flags every
+        // frame the overlay is up.
+        val takeoverMs = if (isCabinet && CrystalReckoning.shouldEnter(
+                persistence.allPilotsCleared(), persistence.isCrystalReleased()
+            )
+        ) time else null
         val machineTop = walkwayY + 15f
         val machineBottom = screenHeight * 0.92f
         val machineHeight = machineBottom - machineTop
@@ -1095,49 +1165,64 @@ class StorePageRenderer(
         linePaint.color = 0xFF4A3A2A.toInt()
         canvas.drawRoundRect(RectF(machineLeft, machineTop, machineRight, machineBottom), 6f, 6f, linePaint)
 
-        for (r in 0 until 3) {
-            val rx = firstReelLeft + r * (reelWidth + reelGap)
-            val ry = reelAreaTop
-            val reelRect = RectF(rx, ry, rx + reelWidth, ry + reelHeight)
+        if (isCabinet) {
+            // Exactly the three reels' own span. reelAreaLeft/Right are padded outwards
+            // and reach into the maintenance hatch on one side and the score board on the
+            // other, which clipped both.
+            val screenRect = RectF(firstReelLeft, reelAreaTop, firstReelLeft + reelTotalWidth, reelAreaBottom)
+            // Published for HangarSurfaceView.update() to build the bezel's own CabinetSim/
+            // CabinetRenderer at this rect's size — see HangarState.cabinetScreenRect.
+            state.cabinetScreenRect = screenRect
+            CabinetBezelRenderer.drawScreen(canvas, screenRect, bezelSim, bezelRenderer, takeoverMs)
+        } else {
+            for (r in 0 until 3) {
+                val rx = firstReelLeft + r * (reelWidth + reelGap)
+                val ry = reelAreaTop
+                val reelRect = RectF(rx, ry, rx + reelWidth, ry + reelHeight)
 
-            // Reel background
-            fillPaint.color = 0xFF0E0E1A.toInt()
-            canvas.drawRoundRect(reelRect, 4f, 4f, fillPaint)
+                // Reel background
+                fillPaint.color = 0xFF0E0E1A.toInt()
+                canvas.drawRoundRect(reelRect, 4f, 4f, fillPaint)
 
-            // Reel border
-            linePaint.color = 0xFF3A3A4A.toInt()
-            linePaint.strokeWidth = 1f
-            canvas.drawRoundRect(reelRect, 4f, 4f, linePaint)
+                // Reel border
+                linePaint.color = 0xFF3A3A4A.toInt()
+                linePaint.strokeWidth = 1f
+                canvas.drawRoundRect(reelRect, 4f, 4f, linePaint)
 
-            // Draw symbol
-            val symbolIndex: Int
-            val isSpinning = state.isSpinning && time < state.reelStopTimes[r]
+                // Draw symbol
+                val symbolIndex: Int
+                val isSpinning = state.isSpinning && time < state.reelStopTimes[r]
 
-            if (isSpinning) {
-                // Spinning — cycle through symbols rapidly
-                val elapsed = time - (state.reelStopTimes[r] - 1500L) // ~1.5s spin time
-                val cycleSpeed = 80L // ms per symbol change
-                symbolIndex = ((elapsed / cycleSpeed) % SYMBOL_COUNT).toInt()
-            } else if (state.isSpinning || state.spinResultTime > 0) {
-                // Stopped or post-spin — show final value
-                symbolIndex = state.reelValues[r]
-            } else {
-                // Idle — show a default face
-                symbolIndex = listOf(SYM_STAR, SYM_YEN, SYM_DIAMOND)[r]
+                if (isSpinning) {
+                    // Spinning — cycle through symbols rapidly
+                    val elapsed = time - (state.reelStopTimes[r] - 1500L) // ~1.5s spin time
+                    val cycleSpeed = 80L // ms per symbol change
+                    symbolIndex = ((elapsed / cycleSpeed) % SYMBOL_COUNT).toInt()
+                } else if (state.isSpinning || state.spinResultTime > 0) {
+                    // Stopped or post-spin — show final value
+                    symbolIndex = state.reelValues[r]
+                } else {
+                    // Idle — show a default face
+                    symbolIndex = listOf(SYM_STAR, SYM_YEN, SYM_DIAMOND)[r]
+                }
+
+                val symCenterX = rx + reelWidth / 2f
+                val symCenterY = ry + reelHeight / 2f
+                drawSymbol(canvas, symbolIndex, symCenterX, symCenterY, reelHeight * 0.3f, isSpinning)
             }
-
-            val symCenterX = rx + reelWidth / 2f
-            val symCenterY = ry + reelHeight / 2f
-            drawSymbol(canvas, symbolIndex, symCenterX, symCenterY, reelHeight * 0.3f, isSpinning)
         }
 
-        // Pay line (horizontal across all reels)
-        linePaint.color = 0xFFCC8844.toInt()
-        linePaint.strokeWidth = 1f
-        linePaint.alpha = 120
-        val payLineY = reelAreaTop + reelHeight / 2f
-        canvas.drawLine(reelAreaLeft + 5f, payLineY, reelAreaRight - 5f, payLineY, linePaint)
-        linePaint.alpha = 255
+        // Pay line (horizontal across all reels). Slot machine only - in Astro Loop
+        // this rect is the cabinet's CRT, and a reel-window artifact bisecting a
+        // vector game screen reads as a rendering bug.
+        if (!isCabinet) {
+            linePaint.color = 0xFFCC8844.toInt()
+            linePaint.strokeWidth = 1f
+            linePaint.alpha = 120
+            val payLineY = reelAreaTop + reelHeight / 2f
+            canvas.drawLine(reelAreaLeft + 5f, payLineY, reelAreaRight - 5f, payLineY, linePaint)
+            linePaint.alpha = 255
+        }
 
         // --- Below reels: Result Screen (top) + Spin Button (bottom) ---
         // Three equal gaps: reels→result, result→button, button→machine bottom
@@ -1162,6 +1247,28 @@ class StorePageRenderer(
         storeButtonRects.add(buttonRect)
 
         // --- CRT Result Screen ---
+        // Hoisted out of the branch below: the spin button's label (unconditional, further down)
+        // sizes its text off this same value, so both paths need it in scope.
+        val fontSize = (boxHeight * 0.38f).coerceIn(12f, 20f)
+
+        if (isCabinet) {
+            // The marquee. message carries the vibration/audio toggle feedback (same
+            // 3-second window the amber-TTF readout used below) and takes the whole
+            // plate when present; otherwise CabinetBezelRenderer.drawMarquee falls back
+            // to the machine's own name, which is the point of this replacing the old
+            // FLYING/idle readout below — a player can finally read BELT RUN without
+            // paying the 100Y door to the overlay.
+            val messageAge = time - state.readoutMessageTime
+            val message = state.readoutMessage?.takeIf {
+                state.readoutMessageTime > 0 && messageAge < 3000L
+            }
+            // Published for HangarSurfaceView.update() to build the marquee's own
+            // CabinetMarqueeDrift at this rect's size — see HangarState.cabinetMarqueeRect.
+            state.cabinetMarqueeRect = resultRect
+            CabinetBezelRenderer.drawMarquee(
+                canvas, resultRect, message, bezelRenderer, marqueeDrift, takeoverMs
+            )
+        } else {
         // Bezel
         fillPaint.color = 0xFF2A2A35.toInt()
         canvas.drawRoundRect(RectF(resultLeft - 3f, resultTop - 3f, resultRight + 3f, resultBottom + 3f), 5f, 5f, fillPaint)
@@ -1183,7 +1290,6 @@ class StorePageRenderer(
 
         // Result content
         val resultAge = time - state.spinResultTime
-        val fontSize = (boxHeight * 0.38f).coerceIn(12f, 20f)
         val symbolSize = boxHeight * 0.55f
 
         val resultDuration = when {
@@ -1276,7 +1382,7 @@ class StorePageRenderer(
                     canvas.drawRect(0f, 0f, screenWidth, screenHeight, fillPaint)
                     fillPaint.alpha = 255
                 }
-            } else if (state.spinResultYen >= 2000) {
+            } else if (state.spinResultSymbol == SYM_DIAMOND) {
                 // Diamond win — strong cyan glow
                 fillPaint.color = 0xFF44DDAA.toInt()
                 fillPaint.alpha = (fadeAlpha * 35).toInt()
@@ -1288,7 +1394,7 @@ class StorePageRenderer(
                 textPaint.color = 0xFF44DDAA.toInt()
                 textPaint.alpha = (fadeAlpha * 255).toInt()
                 canvas.drawText("+${state.spinResultYen}\u00A5", resultRect.centerX() + symbolSize * 0.2f, resultRect.centerY() + fontSize * 0.15f, textPaint)
-            } else if (state.spinResultYen >= 700) {
+            } else if (state.spinResultSymbol == SYM_STAR) {
                 // Star win — subtle gold glow
                 fillPaint.color = 0xFFFFD700.toInt()
                 fillPaint.alpha = (fadeAlpha * 20).toInt()
@@ -1301,12 +1407,14 @@ class StorePageRenderer(
                 textPaint.alpha = (fadeAlpha * 255).toInt()
                 canvas.drawText("+${state.spinResultYen}\u00A5", resultRect.centerX() + symbolSize * 0.2f, resultRect.centerY() + fontSize * 0.15f, textPaint)
             } else if (state.spinResultYen > 0) {
-                // Small win (100, 75, 50) — dim gray or white, no glow
-                val matchedSymbol = when (state.spinResultYen) {
-                    100 -> SYM_YEN
-                    75 -> SYM_BOLT
-                    else -> SYM_WRENCH
-                }
+                // Small win (yen, bolt, wrench) — dim gray or white, no glow.
+                //
+                // The symbol is the one the spin rolled, not one recovered from the payout. This
+                // whole block used to map 100/75/50 back to a symbol, and #23 changed the payouts
+                // out from under it: a 750 diamond took the star branch, a 300 star and a 50 bolt
+                // both came out as the wrench. The reels showed the truth while the result box
+                // beside them disagreed. handleSlotSpin already stores the symbol — read it.
+                val matchedSymbol = if (state.spinResultSymbol >= 0) state.spinResultSymbol else SYM_WRENCH
                 val textColor = if (state.spinResultYen >= 100) 0xFFFFFFFF.toInt() else 0xFF888888.toInt()
 
                 drawSymbol(canvas, matchedSymbol, resultLeft + symbolSize * 0.8f, resultRect.centerY(), symbolSize, false)
@@ -1333,9 +1441,14 @@ class StorePageRenderer(
                 fillPaint.alpha = 255
             }
         }
+        }
 
         // --- Spin Button ---
-        val canSpin = !state.isSpinning && state.actualYen >= 100
+        // A credit already banked is spendable whatever the wallet says — you can walk
+        // out of the cabinet without playing, and then the coin is already in the machine.
+        // isCabinet-gated, so the slot machine's own enabled state is unchanged.
+        val hasBankedCredit = isCabinet && persistence.getCabinetCredits() > 0
+        val canSpin = !state.isSpinning && (state.actualYen >= 100 || hasBankedCredit)
         fillPaint.color = if (canSpin) 0xFF2A2A40.toInt() else 0xFF1A1A24.toInt()
         canvas.drawRoundRect(buttonRect, 4f, 4f, fillPaint)
         linePaint.color = if (canSpin) 0xFFCC8844.toInt() else 0xFF333344.toInt()
@@ -1344,8 +1457,25 @@ class StorePageRenderer(
 
         textPaint.textSize = fontSize
         textPaint.color = if (canSpin) 0xFFFFDD88.toInt() else 0xFF555555.toInt()
-        val buttonLabel = if (state.actualYen < 100 && !state.isSpinning) "NO \u00A5" else "SPIN \u2014 100\u00A5"
+        val buttonLabel = if (isCabinet) {
+            when {
+                // Holding a credit, pressing this costs nothing — the tap handler checks
+                // credits before it ever reaches takeCoin(). Saying INSERT COIN here was a
+                // lie that read as a double charge: you pressed expecting to pay, then saw
+                // CREDIT 1 and concluded the second coin had vanished.
+                //
+                // START, not PRESS START: a cabinet prints START on the button face and
+                // lets the SCREEN say "press start". Writing the verb on the thing you
+                // press is the tell that the phrase came off the wrong surface.
+                hasBankedCredit -> "START"
+                state.actualYen < 100 && !state.isSpinning -> "NO \u00A5"
+                else -> "INSERT COIN \u2014 100\u00A5"
+            }
+        } else {
+            if (state.actualYen < 100 && !state.isSpinning) "NO \u00A5" else "SPIN \u2014 100\u00A5"
+        }
         canvas.drawText(buttonLabel, buttonRect.centerX(), buttonRect.centerY() + fontSize * 0.35f, textPaint)
+        state.insertCoinRect = if (isCabinet) RectF(buttonRect) else null
 
         // --- Payout table (right panel) ---
         val payoutLeft = machineRight - rightPanelWidth + 4f
@@ -1361,11 +1491,11 @@ class StorePageRenderer(
             typeface = FontManager.getRegular()
             textAlign = Paint.Align.CENTER
             isAntiAlias = true
+            // Set here rather than only at the call site below, so the Astro Loop board —
+            // which draws through this same Paint without touching its color — inherits a
+            // legible amber instead of Paint's default black.
+            color = 0xFFAA8855.toInt()
         }
-
-        // Title
-        payoutTitlePaint.color = 0xFFAA8855.toInt()
-        canvas.drawText("PAYOUTS", payoutCenterX, payoutTop + lineH * 0.7f, payoutTitlePaint)
 
         // Payout lines: 3 small symbols on left, value on right
         val payoutValuePaint = Paint().apply {
@@ -1373,28 +1503,52 @@ class StorePageRenderer(
             typeface = FontManager.getRegular()
             textAlign = Paint.Align.RIGHT
             isAntiAlias = true
+            // Same reasoning as payoutTitlePaint above.
+            color = 0xFF888877.toInt()
         }
-        val payoutSymbols = listOf(SYM_ROCKET, SYM_DIAMOND, SYM_STAR, SYM_YEN, SYM_BOLT, SYM_WRENCH)
-        val payoutValues = listOf("BONUS", "2000", "700", "100", "75", "50")
-        // Reserve room for the widest value text ("BONUS" is wider than any number,
-        // and wider still under Exo 2) so the 3-symbol cluster can never clip it.
-        // The cluster spans 3.6 * symbol size at 1.3x spacing; shrink the symbols
-        // only if the panel is too narrow, otherwise keep their normal size.
-        val maxValueWidth = payoutValues.maxOf { payoutValuePaint.measureText(it) }
-        val symbolsLeft = payoutLeft + 4f
-        val symbolsAvail = (payoutRight - 2f - maxValueWidth - 6f) - symbolsLeft
-        val payoutSymSize = (lineH * 0.35f).coerceAtMost((symbolsAvail / 3.6f).coerceAtLeast(1f))
-        val symbolSpacing = payoutSymSize * 1.3f
-        for (i in payoutSymbols.indices) {
-            val py = payoutTop + lineH * (i + 1.7f)
-            // Draw 3 symbols side by side, starting from left
-            val symbolsStartX = symbolsLeft + payoutSymSize * 0.5f
-            for (s in 0 until 3) {
-                val sx = symbolsStartX + s * symbolSpacing
-                drawSymbol(canvas, payoutSymbols[i], sx, py - payoutFontSize * 0.3f, payoutSymSize, false)
+
+        if (isCabinet) {
+            // CENTRED between the CRT's right edge and the cabinet's, rather than hung off
+            // the right edge. Device pass 7: "a little off center" — and it was, by 2.5px:
+            // payoutLeft sits 9px right of reelAreaRight while payoutRight sits 4px left of
+            // machineRight.
+            //
+            // Computed HERE rather than by moving payoutLeft/payoutRight, because those two
+            // are shared with the slot machine's payout table in the else branch below, and
+            // that layout must stay byte-identical.
+            val boardWidth = payoutRight - payoutLeft
+            val boardLeft = reelAreaRight + ((machineRight - reelAreaRight) - boardWidth) / 2f
+            CabinetBezelRenderer.drawBoard(
+                canvas, persistence, boardLeft, boardLeft + boardWidth, payoutTop, lineH,
+                payoutTitlePaint, payoutValuePaint, bezelRenderer, takeoverMs
+            )
+        } else {
+            // Title
+            payoutTitlePaint.color = 0xFFAA8855.toInt()
+            canvas.drawText("PAYOUTS", payoutCenterX, payoutTop + lineH * 0.7f, payoutTitlePaint)
+
+            val payoutSymbols = PAYOUT_SYMBOLS
+            val payoutValues = PAYOUT_VALUES
+            // Reserve room for the widest value text ("BONUS" is wider than any number,
+            // and wider still under Exo 2) so the 3-symbol cluster can never clip it.
+            // The cluster spans 3.6 * symbol size at 1.3x spacing; shrink the symbols
+            // only if the panel is too narrow, otherwise keep their normal size.
+            val maxValueWidth = payoutValues.maxOf { payoutValuePaint.measureText(it) }
+            val symbolsLeft = payoutLeft + 4f
+            val symbolsAvail = (payoutRight - 2f - maxValueWidth - 6f) - symbolsLeft
+            val payoutSymSize = (lineH * 0.35f).coerceAtMost((symbolsAvail / 3.6f).coerceAtLeast(1f))
+            val symbolSpacing = payoutSymSize * 1.3f
+            for (i in payoutSymbols.indices) {
+                val py = payoutTop + lineH * (i + 1.7f)
+                // Draw 3 symbols side by side, starting from left
+                val symbolsStartX = symbolsLeft + payoutSymSize * 0.5f
+                for (s in 0 until 3) {
+                    val sx = symbolsStartX + s * symbolSpacing
+                    drawSymbol(canvas, payoutSymbols[i], sx, py - payoutFontSize * 0.3f, payoutSymSize, false)
+                }
+                payoutValuePaint.color = 0xFF888877.toInt()
+                canvas.drawText(payoutValues[i], payoutRight - 2f, py, payoutValuePaint)
             }
-            payoutValuePaint.color = 0xFF888877.toInt()
-            canvas.drawText(payoutValues[i], payoutRight - 2f, py, payoutValuePaint)
         }
 
         // --- Maintenance hatch (left panel) — centered in gap between machineLeft and firstReelLeft ---

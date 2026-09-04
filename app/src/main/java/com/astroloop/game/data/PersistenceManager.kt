@@ -126,13 +126,20 @@ class PersistenceManager(context: Context) {
         // Bandanas (finale chunk 1)
         editor.putStringSet("earned_bandanas", emptySet())
         editor.remove("pending_bandana_pilot")
-        editor.putBoolean("awaiting_convergence", false)
         editor.putBoolean("crystal_released", false)
         editor.putBoolean("reckoning_attempted", false)
         editor.putBoolean("reckoning_just_won", false)
-        editor.putBoolean("reckoning_just_lost", false)
-        editor.putInt("reckoning_rounds", 0)
-        editor.putInt("reckoning_pool_last", -1)
+        // Retired with the round counter (decision 79). REMOVED, not merely left unwritten:
+        // any device that ran an earlier build still carries these in SharedPreferences, and
+        // a reset that leaves them behind means a later feature reusing one of the names
+        // inherits a value from a superseded design.
+        editor.remove("reckoning_just_lost")
+        editor.remove("reckoning_rounds")
+        editor.remove("reckoning_pool_last")
+        // The release record is an arcade artifact, so resetArcade() clears it too — but a
+        // full reset has to as well, or a wiped save keeps a time set by a run that no
+        // longer exists in it.
+        editor.remove(KEY_BEST_RELEASE)
         editor.remove("total_casino_spins")
         // Desert flashback
         editor.remove("desert_completed")
@@ -404,15 +411,87 @@ class PersistenceManager(context: Context) {
     fun getBandanaCount(): Int = getEarnedBandanas().size
     fun clearAllBandanas() { prefs.edit().putStringSet("earned_bandanas", emptySet()).apply() }
 
+    // --- BELT RUN arcade -------------------------------------------------------
+    // Scores are per pilot and only ever improve. A pilot is "cleared" at the
+    // machine's three-digit ceiling, and all twelve cleared is what opens the
+    // finale in stage 3 - the twin of the bandana count it replaces.
+
+    fun getArcadeScore(pilotId: String): Int = prefs.getInt("arcade_score_$pilotId", 0)
+
+    /** @return true iff this beat the stored best. */
+    fun setArcadeScoreIfBetter(pilotId: String, score: Int): Boolean {
+        if (score <= getArcadeScore(pilotId)) return false
+        prefs.edit().putInt("arcade_score_$pilotId", score).apply()
+        return true
+    }
+
+    // --- The reckoning's one number - decision 112 -----------------------------
+    // A TIME, not a score, and the distinction is the whole reason it is allowed to
+    // exist. The fight stopped paying points because shooting the opening's seeded
+    // rocks had nothing to do with the crystal; how long the crystal took to release
+    // is a record OF the fight. It is a cabinet artifact and nothing else reads it:
+    // the bar never mentions it and TB-26 never mentions it, which is the same
+    // separation decision 96 draws when it forbids the pilot from reporting on the
+    // fight at all.
+    //
+    // Seconds, whole, because three digits is all the machine has.
+
+    /** 0 when nothing has been released yet — see [hasReleaseRecord]. */
+    fun getBestReleaseSeconds(): Int = prefs.getInt(KEY_BEST_RELEASE, 0)
+
+    fun hasReleaseRecord(): Boolean = getBestReleaseSeconds() > 0
+
+    /**
+     * @return true iff this beat the stored best. LOWER is better, which is the one thing
+     * about this that reads backwards next to [setArcadeScoreIfBetter] directly above it.
+     */
+    fun setBestReleaseSecondsIfBetter(seconds: Int): Boolean {
+        // Zero or negative means the clock upstream went wrong, and storing it would make
+        // a record nobody could ever beat.
+        if (seconds <= 0) return false
+        val best = getBestReleaseSeconds()
+        if (best in 1 until seconds) return false
+        prefs.edit().putInt(KEY_BEST_RELEASE, seconds).apply()
+        return true
+    }
+
+    fun isPilotCleared(pilotId: String): Boolean =
+        getArcadeScore(pilotId) >= ARCADE_CLEAR_SCORE
+
+    fun clearedPilotCount(): Int =
+        PilotDefinitions.pilots.count { isPilotCleared(it.id) }
+
+    fun allPilotsCleared(): Boolean =
+        PilotDefinitions.pilots.all { isPilotCleared(it.id) }
+
+    fun getCabinetCredits(): Int = prefs.getInt("cabinet_credits", 0)
+
+    fun addCabinetCredit() {
+        prefs.edit().putInt("cabinet_credits", getCabinetCredits() + 1).apply()
+    }
+
+    /** @return true iff a credit was available and consumed. */
+    fun spendCabinetCredit(): Boolean {
+        val c = getCabinetCredits()
+        if (c <= 0) return false
+        prefs.edit().putInt("cabinet_credits", c - 1).apply()
+        return true
+    }
+
+    fun resetArcade() {
+        val e = prefs.edit()
+        PilotDefinitions.pilots.forEach { e.remove("arcade_score_${it.id}") }
+        e.remove(KEY_BEST_RELEASE)
+        e.putInt("cabinet_credits", 0)
+        e.apply()
+    }
+
     fun getPendingBandanaPilot(): String? =
         prefs.getString("pending_bandana_pilot", null)?.takeIf { it.isNotEmpty() }
     fun setPendingBandanaPilot(pilotId: String) {
         prefs.edit().putString("pending_bandana_pilot", pilotId).apply()
     }
     fun clearPendingBandanaPilot() { prefs.edit().remove("pending_bandana_pilot").apply() }
-
-    fun isAwaitingConvergence(): Boolean = prefs.getBoolean("awaiting_convergence", false)
-    fun setAwaitingConvergence(v: Boolean) { prefs.edit().putBoolean("awaiting_convergence", v).apply() }
 
     fun isCrystalReleased(): Boolean = prefs.getBoolean("crystal_released", false)
     fun setCrystalReleased(v: Boolean) { prefs.edit().putBoolean("crystal_released", v).apply() }
@@ -421,24 +500,11 @@ class PersistenceManager(context: Context) {
     fun isReckoningAttempted(): Boolean = prefs.getBoolean("reckoning_attempted", false)
     fun setReckoningAttempted(v: Boolean) { prefs.edit().putBoolean("reckoning_attempted", v).apply() }
 
-    /** One-shot flag: set when the reckoning fight is won; cleared after the bar chatter fires. */
+    /** One-shot flag: set when the reckoning fight is won; cleared after the bar chatter fires.
+     *  The only reckoning outcome flag there is — a LOSS writes nothing and is answered with
+     *  silence (decision 79), so there is no losing counterpart to pair this with. */
     fun isReckoningJustWon(): Boolean = prefs.getBoolean("reckoning_just_won", false)
     fun setReckoningJustWon(v: Boolean) { prefs.edit().putBoolean("reckoning_just_won", v).apply() }
-
-    /** One-shot flag: set when the reckoning fight is lost; cleared after the bar chatter fires. */
-    fun isReckoningJustLost(): Boolean = prefs.getBoolean("reckoning_just_lost", false)
-    fun setReckoningJustLost(v: Boolean) { prefs.edit().putBoolean("reckoning_just_lost", v).apply() }
-
-    /** Rounds of the crystal reckoning: incremented once per walk-out (fight entry).
-     *  Counts entries, not outcomes — an app kill mid-fight still burned a round. */
-    fun getReckoningRounds(): Int = prefs.getInt("reckoning_rounds", 0)
-    fun setReckoningRounds(v: Int) { prefs.edit().putInt("reckoning_rounds", v.coerceAtLeast(0)).apply() }
-    fun incrementReckoningRounds() = setReckoningRounds(getReckoningRounds() + 1)
-
-    /** Last lost-count pool conversation shown (index into ReckoningRoundChatter.lostCountPool);
-     *  -1 = none yet. Persisted so the pool never repeats across sessions. */
-    fun getReckoningPoolLast(): Int = prefs.getInt("reckoning_pool_last", -1)
-    fun setReckoningPoolLast(v: Int) { prefs.edit().putInt("reckoning_pool_last", v).apply() }
 
     fun isCrystalUnlocked(): Boolean = prefs.getBoolean("crystal_unlocked", false)
     fun setCrystalUnlocked(unlocked: Boolean) { prefs.edit().putBoolean("crystal_unlocked", unlocked).apply() }
@@ -468,6 +534,14 @@ class PersistenceManager(context: Context) {
     fun setLastAstroRunSeconds(seconds: Float) {
         prefs.edit().putFloat(KEY_LAST_ASTRO_RUN_SECONDS, seconds).apply()
     }
+
+    /** Floating debug button centre, raw device pixels. Debug builds only; harmless in release.
+     *  -1f means "never positioned" and the caller supplies a default. Clamped on load, so a
+     *  rotation or cutout change cannot strand the button off screen. */
+    fun getDebugButtonX(): Float = prefs.getFloat(KEY_DEBUG_BTN_X, -1f)
+    fun setDebugButtonX(v: Float) { prefs.edit().putFloat(KEY_DEBUG_BTN_X, v).apply() }
+    fun getDebugButtonY(): Float = prefs.getFloat(KEY_DEBUG_BTN_Y, -1f)
+    fun setDebugButtonY(v: Float) { prefs.edit().putFloat(KEY_DEBUG_BTN_Y, v).apply() }
 
     fun getAstroLoopBestSeconds(): Float = prefs.getFloat(KEY_ASTRO_LOOP_BEST_SECONDS, 0f)
     fun updateAstroLoopBestSeconds(seconds: Float): Boolean {
@@ -587,6 +661,13 @@ class PersistenceManager(context: Context) {
         private const val KEY_LAST_ASTRO_RUN_SECONDS = "last_astro_run_seconds"
         private const val KEY_ASTRO_LOOP_BEST_SECONDS = "astro_loop_best_seconds"
         private const val KEY_ASTRO_LOOP_SHIELD_CONVO = "astroloop_shield_conversation_shown"
+
+        private const val KEY_DEBUG_BTN_X = "debug_btn_x"
+        private const val KEY_DEBUG_BTN_Y = "debug_btn_y"
+
+        /** The machine's three-digit ceiling. Touching it clears the pilot. */
+        private const val KEY_BEST_RELEASE = "belt_best_release_seconds"
+        const val ARCADE_CLEAR_SCORE = 999
 
         val UPGRADE_COSTS = listOf(1000, 2500, 7500, 25000, 50000)
 

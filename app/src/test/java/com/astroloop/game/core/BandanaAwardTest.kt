@@ -33,7 +33,6 @@ class BandanaAwardTest {
         assertTrue(BandanaAward.maybeAward(p, "pilot_dash", 600f))
         assertTrue(p.hasBandana("pilot_dash"))
         assertEquals("pilot_dash", p.getPendingBandanaPilot())
-        assertFalse(p.isAwaitingConvergence())
     }
 
     @Test
@@ -44,7 +43,7 @@ class BandanaAwardTest {
     }
 
     @Test
-    fun twelfthBandanaSetsConvergence() {
+    fun twelfthBandanaStillAwards() {
         val ids = listOf(
             "pilot_medic", "pilot_rascal", "pilot_brutus", "pilot_frost",
             "pilot_dash", "pilot_ember", "pilot_fang", "pilot_kraken",
@@ -54,6 +53,5 @@ class BandanaAwardTest {
         assertEquals(11, p.getBandanaCount())
         assertTrue(BandanaAward.maybeAward(p, "pilot_astro", 700f))  // the 12th
         assertEquals(12, p.getBandanaCount())
-        assertTrue(p.isAwaitingConvergence())
     }
 }

@@ -116,4 +116,30 @@ class BarConversationsTest {
         assertTrue(astroTexts.any { it.contains("Heating costs yen") })
         assertTrue(normalTexts.none { it.contains("Heating costs yen") })
     }
+
+    // Pins the per-speaker column budget across the WHOLE pool — including plain two-
+    // participant conversations, which MultiWayBarConversationsTest's equivalent check
+    // (line ~61) only covers for 3+ participant entries. Both modes are unioned so
+    // TB-26/TOBAR variants are both checked under the speaker name they actually use.
+    @Test
+    fun `every bar conversation line fits its speaker's column budget`() {
+        val budget = mapOf(
+            "DASH" to 59, "FANG" to 59,
+            "MEDIC" to 58, "FROST" to 58, "UNIT-7" to 58, "HAVOC" to 58,
+            "ASTRO" to 58, "TB-26" to 58, "TOBAR" to 58,
+            "RASCAL" to 57, "BRUTUS" to 57, "EMBER" to 57, "KRAKEN" to 57,
+            "WHISKERS" to 55
+        )
+        val convos = BarConversations.getAvailable(allPilots, arcCompleted = true, isAstroLoop = false) +
+            BarConversations.getAvailable(allPilots, arcCompleted = true, isAstroLoop = true)
+        for (convo in convos) {
+            for (line in convo.lines) {
+                val max = budget[line.speaker] ?: continue
+                assertTrue(
+                    "${line.speaker} line over budget ($max): \"${line.text}\" is ${line.text.length}",
+                    line.text.length <= max
+                )
+            }
+        }
+    }
 }

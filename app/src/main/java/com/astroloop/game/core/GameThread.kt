@@ -56,13 +56,22 @@ class GameThread(
             }
 
             try {
-                canvas = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                canvas = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
                     try {
                         surfaceHolder.lockHardwareCanvas()
                     } catch (e: Exception) {
                         surfaceHolder.lockCanvas()
                     }
                 } else {
+                    // API 28 and below take the software canvas deliberately.
+                    //
+                    // lockHardwareCanvas posts the frame through HWUI's RenderThread, and when the
+                    // surface is torn down with a swap still in flight, Android P's HWUI does not
+                    // degrade — it calls LOG_ALWAYS_FATAL and takes the process with it. A reported
+                    // Samsung Android 9 death cutscene aborts with EGL_BAD_ALLOC on exactly that
+                    // path, roughly 19 deaths in 20. The software canvas has no EGL context, so
+                    // there is nothing to abandon. It costs frame rate on hardware that is a decade
+                    // old; it buys a game that does not die when the player does.
                     surfaceHolder.lockCanvas()
                 }
 

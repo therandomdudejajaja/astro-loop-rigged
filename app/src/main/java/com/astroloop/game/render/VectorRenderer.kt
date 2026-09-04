@@ -63,6 +63,7 @@ class VectorRenderer(
      */
     fun renderRestoredShip(canvas: Canvas, ship: Ship, state: GameState, alpha: Float) {
         val displayColor = if (state.isCorruptionRun) Boss.CORRUPTION_COLOR else ship.shipColor
+        val displayPilotColor = if (state.isCorruptionRun) corruptColor(ship.pilotColor) else ship.pilotColor
         ShipRenderer.drawShip(
             canvas = canvas,
             shapeRenderer = shapeRenderer,
@@ -71,7 +72,7 @@ class VectorRenderer(
             rotation = ship.rotation,
             size = ship.radius,
             shipColor = displayColor,
-            pilotColor = ship.pilotColor,
+            pilotColor = displayPilotColor,
             startingWeaponId = ship.startingWeaponId,
             alpha = alpha.coerceIn(0f, 1f)
         )
@@ -82,6 +83,11 @@ class VectorRenderer(
 
         // Corruption runs: player ship renders boss-red
         val displayColor = if (state.isCorruptionRun) Boss.CORRUPTION_COLOR else ship.shipColor
+        // ...but the cockpit dot darkens rather than going red, exactly as it does for every
+        // other corrupted pilot: renderEnemyShip does corruptColor(basePilotColor) below, and the
+        // hangar walkers do the same. ship.pilotColor stays the pilot's true colour — corruption
+        // is presentation, decided here alongside the hull, not baked into the entity.
+        val displayPilotColor = if (state.isCorruptionRun) corruptColor(ship.pilotColor) else ship.pilotColor
 
         // Crystal afterimages (ghost at aim origin with laser sight — multiple simultaneous)
         for (afterimage in state.crystalAfterimages) {
@@ -233,7 +239,7 @@ class VectorRenderer(
             rotation = ship.rotation,
             size = ship.radius,
             shipColor = displayColor,
-            pilotColor = ship.pilotColor,
+            pilotColor = displayPilotColor,
             startingWeaponId = ship.startingWeaponId,
             alpha = 1f
         )

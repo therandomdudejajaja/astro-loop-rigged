@@ -13,6 +13,8 @@ import android.view.SurfaceView
 import android.graphics.Path
 import com.astroloop.game.MainActivity
 import com.astroloop.game.BuildConfig
+import com.astroloop.game.render.DebugFloatingButton
+import com.astroloop.game.cabinet.CabinetDebugIntent
 import com.astroloop.game.data.CrystalFightLines
 import com.astroloop.game.data.CorruptedCrewDefinitions
 import com.astroloop.game.data.BossHintDefinitions
@@ -75,7 +77,70 @@ class GameSurfaceView(
     private val starfieldRenderer = StarfieldRenderer()
     private val hudRenderer = HUDRenderer()
     private val upgradeSelectionRenderer = UpgradeSelectionRenderer()
-    private val debugMenuRenderer = DebugMenuRenderer().also { it.telemetryManager = telemetryManager }
+    private val debugMenuRenderer = DebugMenuRenderer()
+    private val debugButton = DebugFloatingButton(radiusPx = 54f)
+    private var debugButtonLoaded = false
+
+    /** GameSurfaceView is always a live run — the hangar's implementation is Task 3's. */
+    private val debugHost = object : DebugActionHost {
+        override fun isInRun(): Boolean = true
+
+        override fun returnToHangar() {
+            onGameOver(0, false)
+        }
+
+        override fun closeMenu() {
+            state.debugMenuOpen = false
+        }
+
+        override fun toggleLoadout(action: String) {
+            when (action) {
+                "WEAPON_TOGGLE" -> {
+                    weaponSystem.syncFromState(state)
+                    state.recalculateStats()
+                }
+                "PASSIVE_TOGGLE" -> state.recalculateStats()
+            }
+        }
+
+        override fun runOnlyAction(action: String) {
+            when (action) {
+                "INSTANT_DEATH" -> {
+                    state.debugMenuOpen = false
+                    state.lastDamageSource = "debug_kill"
+                    ship.health = 0f
+                    handlePlayerDeath()
+                }
+                "BOSS_NOW" -> {
+                    state.survivalTime = Boss.SPAWN_TIME - 1f
+                    state.debugMenuOpen = false
+                }
+                "PLAY_DESERT" -> {
+                    state.debugMenuOpen = false
+                    initializeDesert()
+                    state.phase = GamePhase.DESERT
+                }
+                "PLAY_DESERT_P2" -> {
+                    state.debugMenuOpen = false
+                    initializeDesert()
+                    state.desertTimer = 120f
+                    state.desertPhase = 1
+                    state.phase = GamePhase.DESERT
+                }
+                "DESERT_CRYSTAL" -> {
+                    state.debugMenuOpen = false
+                    initializeDesert()
+                    state.phase = GamePhase.DESERT
+                    state.desertPhase = 3
+                    state.desertCrystalPhase = 1
+                }
+            }
+        }
+
+        override fun clearTelemetry() {
+            telemetryManager.clearLog()
+        }
+    }
     private val crystalRenderer = CrystalRenderer()
     private val vibrator: Vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         (context.getSystemService(android.content.Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager).defaultVibrator
@@ -142,42 +207,16 @@ class GameSurfaceView(
         onAsteroidDestroyed = ::handleAsteroidDestroyedWithTrail
     )
     private val combatDroneSystem = CombatDroneSystem(state, ship)
-    private val projectileEffectsSystem = ProjectileEffectsSystem(ship, state, collisionSystem, visualEffects, ::applyDamageModifiers, ::handleAsteroidDestroyedWithTrail, ::onEnemyDestroyed, ::handlePlayerDeath)
+    private val volatileShockwaveSystem = VolatileShockwaveSystem(
+        state = state,
+        visualEffects = visualEffects,
+        onAsteroidDestroyed = ::handleAsteroidDestroyedWithTrail,
+        onEnemyDestroyed = ::onEnemyDestroyed,
+        onShipDamaged = ::applyVolatileShockwaveDamage
+    )
+    private val projectileEffectsSystem = ProjectileEffectsSystem(ship, state, collisionSystem, visualEffects, ::applyDamageModifiers, ::handleAsteroidDestroyedWithTrail, ::onEnemyDestroyed, ::handlePlayerDeath, volatileShockwaveSystem::spawn)
     private val radioSystem = RadioSystem()
     private val crewmateEncounter = CrewmateEncounter(ship, EntityPools.projectiles)
-
-    // Crystal reckoning fight — damage/hitbox knobs live in CrystalFightSystem (fairness-tested)
-    private val crystalFightSystem = CrystalFightSystem()
-    private var reckoningBoss: Boss? = null
-
-    // Ghost-ship lance climax (Task 8)
-    private val ghostLance = com.astroloop.game.render.GhostShipLance()
-    private var reckoningGhostStep = 0        // cursor into CrystalFightLines.ghostScript
-    private var reckoningGhostTimer = 0f      // seconds since the lance began
-    private var reckoningLanceDoneHold = 0f   // post-lance breathing room before the fly-home
-    private var reckoningWatchX = 0f          // where the ghosts gather — Astro turns to watch
-    private var reckoningWatchY = 0f
-    private var reckoningFlyOffComplete = false // ship has left the frozen view heading south
-    private var reckoningExitFadeTimer = 0f     // drives the post-fly-off fade to black
-    private var reckoningWinHandedOff = false // one-shot guard: hangar handoff fires exactly once
-
-    // Per-bullet tick: every reckoning bullet voices sfx_reckoning_bullet, pitch-jittered so
-    // same-frame arms read as a swarm shimmer, not one phase-summed blip. Soft (clip baked to
-    // -20 LUFS ~0.1s) so ~40 bullets/s in P5 stays inside SoundPool's 16-stream budget.
-    private val RECKONING_BULLET_VOLUME = 0.225f
-    private val RECKONING_BULLET_PITCH_JITTER = 0.08f  // ±8% detune, centered on the baked pitch
-
-    // Two-part radio scheduling for reckoning scripted lines
-    private val CRYSTAL_CALLSIGN = "CRYSTAL"
-    private var pendingReckoningLine: String? = null
-    private var pendingReckoningSpeaker: String = ""
-    private var pendingReckoningColor: Int = 0
-    private var pendingReckoningTimer: Float = 0f
-    private val astroRadioColor: Int
-        get() = PilotDefinitions.getPilot("pilot_astro")?.color ?: CrystalPalette.ICE
-
-    // Reusable paint for reckoning boss orb (avoids per-frame allocation)
-    private val reckoningOrbPaint = Paint().apply { isAntiAlias = true; style = Paint.Style.FILL }
 
     // Background paint
     private val backgroundPaint = Paint().apply {
@@ -373,7 +412,6 @@ class GameSurfaceView(
     private var tapDownX: Float = 0f
     private var tapDownY: Float = 0f
     private var tapDownTime: Long = 0L
-    private var lastDebugMenuPage: Int = -1  // Track page changes for debug BGM mute
     private var pauseDebugHoldTimer: Float = 0f
     private var pauseDebugHoldActive: Boolean = false
 
@@ -405,6 +443,18 @@ class GameSurfaceView(
         /** Desert enemy despawn radius from the camera center. Viewport-relative because
          *  the spawn band is — a fixed radius culled fresh spawns on tall screens. */
         fun desertDespawnDistance(screenHeight: Float): Float = screenHeight * 1.1f
+
+        /**
+         * How long the winning card is held before it applies.
+         *
+         * Half a second was enough to see that the wheel had stopped and not enough to read what it
+         * stopped on, which made a free upgrade feel like something being taken rather than given.
+         *
+         * internal because UpgradeSelectionRenderer divides the dim timer by this same duration to
+         * fade the losing cards — two copies of the number would drift, and the visible symptom
+         * would be the dim finishing early and the cards sitting at full opacity.
+         */
+        internal const val LUCKY_STAR_HOLD_SECONDS = 1.25f
 
         // Boss fight phases - normal
         const val PHASE_NONE = 0
@@ -621,6 +671,7 @@ class GameSurfaceView(
         beamDamageSystem.reset()
 
         vampiricLeecherSystem.reset()
+        volatileShockwaveSystem.reset()
         orbiterSoundCooldown = 0f
         bossAuraSoundCooldown = 0f
         bossReplyTimer = 0f
@@ -765,18 +816,6 @@ class GameSurfaceView(
 
         state.isPostHorrorRun = persistence.isDesertCompleted() && !persistence.hasDesertGoodEnding()
 
-        // Clear any boss/taunt left over from a previous run's death retreat — the boss is
-        // deliberately kept alive through the retreat so it never blinks out mid-scene.
-        reckoningBoss = null
-        pendingReckoningLine = null
-
-        // Enter the Crystal Reckoning instead of a normal run when all conditions are met
-        if (CrystalReckoning.shouldEnter(state.astroLoopMode, startingPilotId, persistence.getBandanaCount(), persistence.isCrystalReleased())) {
-            state.phase = GamePhase.PLAYING
-            startReckoningOpening()
-            return
-        }
-
         // Start playing immediately with starting loadout
         state.phase = GamePhase.PLAYING
         radioSystem.onCombatStart(state)
@@ -802,40 +841,11 @@ class GameSurfaceView(
 
         // Freeze game while debug menu is open
         if (state.debugMenuOpen) {
-            // Detect page changes for debug BGM mute/unmute
-            if (state.debugMenuPage != lastDebugMenuPage) {
-                if (state.debugMenuPage == 4) {
-                    SoundManager.muteBGMForDebug()
-                }
-                if (lastDebugMenuPage == 4) {
-                    SoundManager.unmuteBGMForDebug()
-                    SoundManager.stopDebugBGM()
-                    SoundManager.clearTuningAutoPlay()
-                    debugMenuRenderer.tuningBGMPlaying = false
-                }
-                lastDebugMenuPage = state.debugMenuPage
-            }
-            // Tuning per-frame updates when on page 4
-            if (state.debugMenuPage == 4) {
-                SoundManager.updateTuningAutoPlay()
-                debugMenuRenderer.updateTuningScroll()
-            }
             // Flak design preview animation
             if (state.debugMenuPage == 3) {
                 debugMenuRenderer.debugFlakAge = (debugMenuRenderer.debugFlakAge + deltaTime) % 1.0f
             }
             return
-        }
-
-        // Clean up tuning when debug menu just closed
-        if (lastDebugMenuPage >= 0) {
-            if (lastDebugMenuPage == 4) {
-                SoundManager.unmuteBGMForDebug()
-                SoundManager.stopDebugBGM()
-                SoundManager.clearTuningAutoPlay()
-                debugMenuRenderer.tuningBGMPlaying = false
-            }
-            lastDebugMenuPage = -1
         }
 
         // Update global fade overlay (used for scene transition fade-ins)
@@ -879,19 +889,6 @@ class GameSurfaceView(
     }
 
     private fun updatePlaying(deltaTime: Float) {
-        // Crystal reckoning opening — empty field + Astro lines before the fight
-        if (state.reckoningActive && state.reckoningStage == GameState.ReckoningStage.OPENING) {
-            updateReckoningOpening(deltaTime); return
-        }
-        // Crystal reckoning fight — runs instead of normal play
-        if (state.reckoningActive && state.reckoningStage == GameState.ReckoningStage.FIGHT) {
-            updateReckoningFight(deltaTime); return
-        }
-        // Ghost-ship lance climax — runs instead of normal play
-        if (state.reckoningActive && state.reckoningStage == GameState.ReckoningStage.LANCE) {
-            updateReckoningLance(deltaTime); return
-        }
-
         // Update difficulty
         difficultySystem.update(deltaTime, state)
 
@@ -907,15 +904,6 @@ class GameSurfaceView(
                 val astroCallsign = PilotDefinitions.getPilot("pilot_astro")?.callsign ?: "ASTRO"
                 radioSystem.showScriptedMessage(state, astroCallsign, "...", Boss.CORRUPTION_COLOR, isBoss = true)
             }
-        }
-
-        // Post-reckoning death: the stunned crystal boss keeps tracking the fleeing ship
-        // (rotation-only — Boss.update aims before its stun early-return), and the queued
-        // "I'll be waiting." taunt still needs its delay tick. No-op outside that scenario:
-        // reckoningBoss is null everywhere else this path runs.
-        if (!state.reckoningActive && reckoningBoss != null) {
-            reckoningBoss?.update(deltaTime)
-            tickPendingReckoningLine(deltaTime)
         }
 
         // Astro Loop retreat state machine
@@ -1306,11 +1294,7 @@ class GameSurfaceView(
         }
 
         // Update camera to follow ship (freeze during retreat or while stunned).
-        // Reckoning death exception: once the crystal boss is on the field (reckoningBoss != null,
-        // i.e. the post-death retreat), freeze the camera IMMEDIATELY rather than at retreatPhase 2.
-        // The boss's centre-glide target is captured from this frame's camera; letting the camera
-        // keep following the coasting ship through phase 1 would leave the boss planted off-centre.
-        if (!state.playerStunned && state.retreatPhase < 2 && reckoningBoss == null) {
+        if (!state.playerStunned && state.retreatPhase < 2) {
             camera.update(ship)
         }
 
@@ -1427,7 +1411,6 @@ class GameSurfaceView(
                 val dist = kotlin.math.sqrt((dx * dx + dy * dy).toDouble()).toFloat()
                 if (dist > prevR && dist <= currR) {
                     handleAsteroidDestroyedWithTrail(asteroid)
-                    asteroid.isActive = false
                 }
             }
 
@@ -1439,6 +1422,12 @@ class GameSurfaceView(
             }
         }
 
+        // Volatile detonation fronts — damage arrives with the ring, not before it.
+        volatileShockwaveSystem.update(deltaTime, ship, asteroids, enemies,
+            // Only the crystal half is passed. The ship's own i-frames are read live inside,
+            // because a wave that lands grants them and the next wave has to see them.
+            crystalImmune = state.hasCrystalPowers)
+
         // Update weapons (auto-fire) - target both asteroids, enemies, and boss
         // Skip boss targeting during corruption finale — boss is at player position
         allTargetsCache.clear()
@@ -1448,7 +1437,7 @@ class GameSurfaceView(
             allTargetsCache.add(boss)
         }
         val allTargets = allTargetsCache
-        if (!state.weaponsDisabled && !state.playerStunned && state.bossFightPhase != PHASE_POST_VICTORY &&
+        if (!state.playerStunned && state.bossFightPhase != PHASE_POST_VICTORY &&
                 state.bossFightPhase < PHASE_OTHER_FLEET && !state.bossEmpFired &&
                 state.retreatPhase < 2 && state.corruptionRushPhase == 0) {
             weaponSystem.update(deltaTime, ship, state, allTargets, asteroids)
@@ -2488,9 +2477,10 @@ class GameSurfaceView(
             if (!ship.isInvulnerable && !tryCrystalDodge() && !tryEvade(state)) {
                 val healthBefore = ship.health
                 val shieldBefore = ship.currentShield
-                ship.takeDamage(asteroid.damage)
-                state.telemetryDamageTakenBy["asteroid"] = (state.telemetryDamageTakenBy["asteroid"] ?: 0f) + asteroid.damage
-                state.telemetryTotalDamageTaken += asteroid.damage
+                val contactDamage = asteroid.getContactDamage()
+                ship.takeDamage(contactDamage)
+                state.telemetryDamageTakenBy["asteroid"] = (state.telemetryDamageTakenBy["asteroid"] ?: 0f) + contactDamage
+                state.telemetryTotalDamageTaken += contactDamage
                 state.lastDamageSource = "asteroid"
                 vibrateHit()
                 // Only play sound if the asteroid sound cooldown has expired — prevents rapid
@@ -2939,10 +2929,42 @@ class GameSurfaceView(
     }
 
     private fun handleAsteroidDestroyedWithTrail(asteroid: Asteroid) {
+        // One rock, one death. Five of the six kill paths never cleared isActive, so a rock that
+        // crossed zero health kept answering "destroyed" to every further hit that frame — and the
+        // loot path kept agreeing, spawning two more fragments each time. See claimDestruction.
+        if (!asteroid.claimDestruction()) return
         captureTrailFade(asteroid)
         SoundManager.playSFX("sfx_asteroid_break", volume = 0.5f)
         state.telemetryAsteroidsDestroyed++
         lootSystem.handleAsteroidDestroyed(asteroid)
+    }
+
+    /** The player half of a volatile detonation front — see VolatileShockwaveSystem. */
+    private fun applyVolatileShockwaveDamage(damage: Float) {
+        val shieldBefore = ship.currentShield
+        ship.takeDamage(damage)
+        // I-frames, like every other damage source in the game. Volatile blasts used to grant
+        // none, so a chain of overlapping fronts dealt all of its damage in one instant with
+        // nothing between the hits — at the Astro Loop ramp cap, several times 180.
+        if (!isNonAstroCorruptionRun) ship.makeInvulnerable()
+        state.telemetryDamageTakenBy["asteroid"] =
+            (state.telemetryDamageTakenBy["asteroid"] ?: 0f) + damage
+        state.telemetryTotalDamageTaken += damage
+        state.lastDamageSource = "asteroid"
+        vibrateHit()
+        playDamageSound(shieldBefore, ship.currentShield)
+        visualEffects.addDamageNumber(
+            ship.position.x,
+            ship.position.y - ship.radius,
+            damage.toInt(),
+            0xFFFF4444.toInt()
+        )
+        val revengeStacks = state.passiveStacks["revenge_protocol"] ?: 0
+        if (revengeStacks > 0) {
+            state.revengeTimer = revengeStacks * 2f
+            state.revengeActive = true
+        }
+        if (ship.health <= 0) handlePlayerDeath()
     }
 
     private fun applyDamageModifiers(baseDamage: Float): Pair<Float, Boolean> {
@@ -3041,7 +3063,6 @@ class GameSurfaceView(
     }
 
     private fun tryEvade(state: GameState): Boolean {
-        if (state.passivesDisabled) return false
         val evasionChance = state.evasionChance
         if (evasionChance > 0 && kotlin.random.Random.nextFloat() < evasionChance) {
             // Dodge successful - trigger visual feedback
@@ -3053,7 +3074,7 @@ class GameSurfaceView(
     }
 
     private fun tryCrystalDodge(): Boolean {
-        if (state.passivesDisabled || !state.hasCrystalPowers || ship.isInvulnerable) return false
+        if (!state.hasCrystalPowers || ship.isInvulnerable) return false
 
         // Crystal power: add new afterimage with laser sight + railgun shot (no cap)
         val afterimage = GameState.CrystalAfterimage(
@@ -3138,382 +3159,11 @@ class GameSurfaceView(
         }
     }
 
-    // =========================================================================
-    // Crystal Reckoning opening (Task 9) — empty field + Astro monologue
-    // =========================================================================
-
-    private fun queueReckoningLine(speaker: String, text: String, color: Int, delay: Float) {
-        pendingReckoningSpeaker = speaker
-        pendingReckoningLine = text
-        pendingReckoningColor = color
-        pendingReckoningTimer = delay
-    }
-
-    private fun tickPendingReckoningLine(dt: Float) {
-        val line = pendingReckoningLine ?: return
-        pendingReckoningTimer -= dt
-        if (pendingReckoningTimer <= 0f) {
-            pendingReckoningLine = null
-            radioSystem.showScriptedMessage(state, pendingReckoningSpeaker, line, pendingReckoningColor)
-        }
-    }
-
-    private fun startReckoningOpening() {
-        // Clear the field so the opening runs in empty space (no asteroids or enemies)
-        EntityPools.asteroids.freeAll()
-        EntityPools.enemies.freeAll()
-        activeAsteroids.clear()
-        activeEnemies.clear()
-        pendingReckoningLine = null
-
-        // First attempt plays the full monologue and arms the skip; every retry after a death
-        // jumps straight to the closing "Time to close it." line. Winning sets crystal_released
-        // and blocks re-entry, so this flag only ever affects retries.
-        val persistence = PersistenceManager(context)
-        state.reckoningSkipOpening = persistence.isReckoningAttempted()
-        if (!state.reckoningSkipOpening) persistence.setReckoningAttempted(true)
-        persistence.incrementReckoningRounds()   // counts walk-outs — every entry, win or lose
-
-        state.reckoningActive = true
-        state.reckoningStage = GameState.ReckoningStage.OPENING
-        state.reckoningTimer = 0f
-    }
-
-    private fun updateReckoningOpening(dt: Float) {
-        // Player flies normally (joystick → ship), no weapon firing
-        ship.moveDirection.set(touchController.moveDirection)
-        ship.moveDirection.mul(touchController.moveMagnitude)
-        movementSystem.updateShip(ship, state, dt)
-
-        camera.update(ship)
-        starfieldRenderer.updateWithCamera(camera)
-        if (state.graceTimer > 0f) state.graceTimer -= dt
-        visualEffects.update(dt)
-        state.survivalTime += dt
-
-        radioSystem.update(dt, state)
-        tickPendingReckoningLine(dt)
-
-        val prev = state.reckoningTimer
-        state.reckoningTimer += dt
-        val t = state.reckoningTimer
-
-        // Retry after a failed attempt: only the closing line, then straight into the fight —
-        // no re-listening to the whole monologue.
-        if (state.reckoningSkipOpening) {
-            val closingLine = CrystalFightLines.opening.last().second  // "Time to close it."
-            if (prev < 1.5f && t >= 1.5f) {
-                radioSystem.showScriptedMessage(state, "ASTRO", closingLine, astroRadioColor)
-            }
-            if (t >= 6f) {  // ~4.5s read time on the one line, then the boss entrance
-                SoundManager.startReckoningBGM(context)
-                startReckoningFight()
-            }
-            return
-        }
-
-        // Three two-part Astro lines at ~3s/10s/17s (part 2 follows +3.5s) — each part
-        // needs its full read time; tighter spacing replaced lines before they were read.
-        for ((i, pair) in CrystalFightLines.opening.withIndex()) {
-            val at = 3f + i * 7f
-            if (prev < at && t >= at) {
-                radioSystem.showScriptedMessage(state, "ASTRO", pair.first, astroRadioColor)
-                queueReckoningLine("ASTRO", pair.second, astroRadioColor, 3.5f)
-            }
-        }
-
-        // At ~24s (last line lands at 20.5s + read time): reuse the 10-minute boss-spawn
-        // transition (BGM only — the entrance SFX was removed from all boss entrances as
-        // too strong), then enter fight
-        if (t >= 24f) {
-            SoundManager.startReckoningBGM(context)
-            startReckoningFight()
-        }
-    }
-
-    // =========================================================================
-    // Crystal Reckoning fight (Task 7)
-    // =========================================================================
-
-    private fun startReckoningFight() {
-        val boss = Boss()
-        // 0.30 × screenHeight: upper-middle of the (ship-centered) view — the full drawn
-        // extent stays on screen at spawn on any phone aspect, and the player's opening
-        // run restores fight distance immediately.
-        boss.initialize(ship.position.x, ship.position.y - screenHeight * 0.30f, ship)
-        boss.radius = Boss.BOSS_SIZE * 2f   // 2× oversize
-        // Stable emitter (Touhou): no lunges or strafe jitter — the spirals are the fight
-        boss.holdPattern = true
-        reckoningBoss = boss
-
-        // Entrance: crystal zap burst covers the boss materialization.
-        // No entrance SFX — stings were deliberately removed from all boss entrances.
-        state.crystalZapActive = true
-        state.crystalZapTimer = 0f
-        crystalRenderer.activateZap(boss.position.x, boss.position.y)
-        vibrateExplosion()
-
-        crystalFightSystem.reset()
-        state.reckoningActive = true
-        state.reckoningStage = GameState.ReckoningStage.FIGHT
-        state.reckoningTimer = 0f
-        state.bossActive = true          // red arena via starfieldRenderer.bossMode
-        state.weaponsDisabled = true
-        state.passivesDisabled = true
-        ship.health = ship.maxHealth
-    }
-
     private fun tickCrystalZap(dt: Float) {
         if (!state.crystalZapActive) return
         state.crystalZapTimer += dt
         crystalRenderer.updateZap(dt)
         if (!crystalRenderer.zapActive) state.crystalZapActive = false
-    }
-
-    private fun updateReckoningFight(dt: Float) {
-        val boss = reckoningBoss ?: return
-        radioSystem.update(dt, state)
-        tickPendingReckoningLine(dt)
-        tickCrystalZap(dt)
-
-        val projectiles = EntityPools.projectiles.getAllInUse()
-
-        // 1) Player flies normally (joystick → ship), NO firing (weapons disabled).
-        ship.moveDirection.set(touchController.moveDirection)
-        ship.moveDirection.mul(touchController.moveMagnitude)
-        movementSystem.updateShip(ship, state, dt)
-
-        camera.update(ship)
-        starfieldRenderer.updateWithCamera(camera)
-        if (state.graceTimer > 0f) state.graceTimer -= dt
-        visualEffects.update(dt)
-        state.survivalTime += dt
-
-        // 2) Boss chases (real Boss AI) — suppress its own weapon; fight system fires instead.
-        boss.update(dt)
-        boss.wantsToFire = false
-
-        // 3) Emit the phase's bullets from the moving boss; phase-change caption.
-        // Each bullet voices its own soft tick in spawnCrystalBullet — the sound is driven by
-        // the bullets themselves, not a parallel clock, so it can never desync from the fire.
-        val burst = crystalFightSystem.update(boss.position.x, boss.position.y, dt)
-        for (s in burst) spawnCrystalBullet(s)
-        crystalFightSystem.phaseChanged?.let { ph ->
-            val (first, second) = CrystalFightLines.taunt(ph)
-            radioSystem.showScriptedMessage(state, CRYSTAL_CALLSIGN, first, CrystalPalette.MID)
-            // P5 is a single scream — no measured follow-up.
-            if (second != null) queueReckoningLine(CRYSTAL_CALLSIGN, second, CrystalPalette.MID, 3.5f)
-        }
-
-        // 4) Move/age bullets.
-        movementSystem.updateProjectiles(projectiles, dt)
-
-        // 5) Bullets damage the player (death → retreat/crystal-freeze → hangar).
-        checkEnemyProjectileHitsOnPlayer(projectiles)
-        // Death: startRetreat() sets retreatPhase > 0 (astroLoopMode), or phase changes on gameOver.
-        // Either way, clear reckoning so the dispatch doesn't re-enter next frame.
-        // weaponsDisabled/passivesDisabled stay LOCKED through the retreat/death play-out:
-        // the retreat runs through the normal updatePlaying path, and re-enabling here made the
-        // combat drone pop in and weapons rearm mid-fly-off (Astro's kit still holds the tb26
-        // passive; only the flags bench it). GameState.reset() clears both on the next run.
-        if (state.retreatPhase > 0 || state.phase != GamePhase.PLAYING) {
-            // A failed attempt is NOT a run — flag it so the bar skips the survived/best report.
-            PersistenceManager(context).setReckoningJustLost(true)
-            state.reckoningActive = false
-            state.reckoningStage = GameState.ReckoningStage.NONE
-            // The boss glides to the centre of the now-frozen view and plants itself there,
-            // rotation still tracking the fleeing ship (Boss.update aims before the centre
-            // glide, and again once stunned; ticked from updatePlaying during the retreat).
-            // The camera freezes for the fly-off, so the planted boss holds centre-screen
-            // while the ship flies out the bottom — no blink-out. Cleared at next run init.
-            boss.startCenterApproach(camera.x + screenWidth / 2f, camera.y + screenHeight / 2f)
-            // Parting taunt a beat after Astro's retreat_home line (fired by startRetreat)
-            queueReckoningLine(CRYSTAL_CALLSIGN, "I'll be waiting.", CrystalPalette.MID, 2.5f)
-            return
-        }
-
-        // 6) Cull spent bullets, sync render list. Expired bullets get the pulse-cannon-style
-        // end-of-life spark (the reckoning skips ProjectileEffectsSystem, which normally does
-        // this) — nothing may simply vanish.
-        for (p in projectiles) {
-            if (!p.isActive) {
-                if (p.expiredNaturally) {
-                    visualEffects.addHitFlash(p.position.x, p.position.y, 16f, p.color)
-                    p.expiredNaturally = false
-                }
-                EntityPools.projectiles.free(p)
-            }
-        }
-        EntityPools.projectiles.getActiveEntities(activeProjectiles)
-
-        // 7) Survival → win.
-        if (crystalFightSystem.survived) onReckoningSurvived()
-    }
-
-    private fun spawnCrystalBullet(s: BulletSpec) {
-        val p = EntityPools.projectiles.obtain()
-        // Lifetime 20s is a pure safety net: at 500-900 px/s every layer exits the screen and
-        // dies to the off-screen camera cull (ENTITY_DESPAWN_DISTANCE) long before expiry, so
-        // bullets never pop mid-screen — the expiry spark remains only as a fallback.
-        p.initialize(s.x, s.y, s.vx, s.vy, ProjectileType.BULLET, CrystalFightSystem.BULLET_DAMAGE, 20f)
-        p.isEnemyProjectile = true
-        p.radius = CrystalFightSystem.BULLET_RADIUS
-        p.color = s.color
-        // One soft tick per bullet, pitch-jittered so simultaneous same-frame arms decorrelate
-        // into a swarm shimmer instead of one louder blip.
-        val rate = 1f + (kotlin.random.Random.nextFloat() - 0.5f) * 2f * RECKONING_BULLET_PITCH_JITTER
-        SoundManager.playSFX("sfx_reckoning_bullet", RECKONING_BULLET_VOLUME, rate)
-    }
-
-    private fun onReckoningSurvived() {
-        state.weaponsDisabled = false
-        state.passivesDisabled = false
-        state.reckoningStage = GameState.ReckoningStage.LANCE
-
-        // Strip: the sequencer stops with the FIGHT stage; drop the bare bed under the
-        // ghost dialogue (0.35 of full — tuned on device, see the design spec).
-        SoundManager.duckBossBGM(0.35f)
-
-        // Fade the in-flight crystal bullets out (0.5s) rather than clearing them —
-        // an instant freeAll blinked a full bullet-hell field away in one frame.
-        fadeAllProjectiles()
-
-        // Start the ghost-ship lance — keep reckoningBoss alive for render until burstFired
-        val boss = reckoningBoss ?: return
-        reckoningGhostStep = 0
-        reckoningGhostTimer = 0f
-        reckoningLanceDoneHold = 0f
-        reckoningFlyOffComplete = false
-        reckoningExitFadeTimer = 0f
-        // Astro cuts the engine and turns to watch the ghosts gather at the crystal —
-        // the climax belongs to the crew (thrust only renders above 20px/s).
-        reckoningWatchX = boss.position.x
-        reckoningWatchY = boss.position.y
-        ship.velocity.set(0f, 0f)
-        ghostLance.start(boss.position.x, boss.position.y)
-        pendingReckoningLine = null
-    }
-
-    /** Steer the ship's nose toward [targetAngle] at the retreat's turn rate. */
-    private fun turnShipToward(targetAngle: Float, dt: Float) {
-        var rotDiff = targetAngle - ship.rotation
-        while (rotDiff < -Math.PI.toFloat()) rotDiff += (2 * Math.PI).toFloat()
-        while (rotDiff > Math.PI.toFloat()) rotDiff -= (2 * Math.PI).toFloat()
-        ship.rotation += rotDiff * (4f * dt).coerceAtMost(1f)
-    }
-
-    private fun updateReckoningLance(dt: Float) {
-        // Fly-home begins after the shatter has had its hold; from then the camera freezes
-        // (retreat-style) so the ship visibly leaves the view heading south.
-        val flyingHome = ghostLance.stage == com.astroloop.game.render.GhostShipLance.Stage.DONE &&
-                         reckoningLanceDoneHold >= 1.5f
-        if (!flyingHome) camera.update(ship)
-        starfieldRenderer.updateWithCamera(camera)
-        if (state.graceTimer > 0f) state.graceTimer -= dt
-        visualEffects.update(dt)
-
-        // Keep ticking the fading fight bullets so the fade-out actually plays
-        val projectiles = EntityPools.projectiles.getAllInUse()
-        movementSystem.updateProjectiles(projectiles, dt)
-        for (p in projectiles) if (!p.isActive) EntityPools.projectiles.free(p)
-        EntityPools.projectiles.getActiveEntities(activeProjectiles)
-
-        radioSystem.update(dt, state)
-        tickPendingReckoningLine(dt)
-
-        ghostLance.update(dt)
-
-        // Drive the ghost script off the lance clock. Astro's silence breaks ONLY for his crew —
-        // the crystal never gets a word from him. The last line ("Go.") RELEASES the ghosts:
-        // the crystal shatters because they leave, not because it was hit.
-        reckoningGhostTimer += dt
-        while (reckoningGhostStep < CrystalFightLines.ghostScript.size &&
-               reckoningGhostTimer >= CrystalFightLines.ghostScript[reckoningGhostStep].third) {
-            val (speaker, line, _) = CrystalFightLines.ghostScript[reckoningGhostStep]
-            val isCrew = speaker != "CRYSTAL" && speaker != "ASTRO"
-            val color = when (speaker) {
-                "CRYSTAL" -> CrystalPalette.MID
-                "ASTRO"   -> astroRadioColor
-                else      -> PilotDefinitions.pilots.find { it.callsign == speaker }?.color
-                             ?: CrystalPalette.ICE
-            }
-            radioSystem.showScriptedMessage(state, speaker, line, color, isGhost = isCrew)
-            if (line == CrystalFightLines.GHOST_RELEASE_LINE) {
-                SoundManager.playSFX("sfx_ghost_lance")
-                ghostLance.release()
-            }
-            reckoningGhostStep++
-        }
-
-        // Once burst fires, the boss has shattered — clear it so the render stub stops drawing
-        if (ghostLance.burstFired && reckoningBoss != null) {
-            SoundManager.playSFX("sfx_crystal_shatter")
-            SoundManager.fadeOutBossBGM()
-            reckoningBoss?.let { rb ->
-                // Shatter: crystal-colored burst so the boss never just vanishes
-                visualEffects.addExplosion(rb.position.x, rb.position.y, rb.radius * 1.5f, CrystalPalette.MID)
-            }
-            reckoningBoss = null
-        }
-
-        // Astro is a spectator until the fly-home: engine dark (zeroed velocity draws no
-        // thrust), nose tracking the gathering — through the release and the shatter.
-        if (!flyingHome) {
-            ship.velocity.set(0f, 0f)
-            turnShipToward(
-                kotlin.math.atan2(reckoningWatchY - ship.position.y, reckoningWatchX - ship.position.x),
-                dt
-            )
-        }
-
-        // Lance complete — hold a beat so the shatter and trails clear, then fly home: turn
-        // south and leave the frozen view like a retreat (no emergency shield — nothing out
-        // here anymore), and only then fade to black. No farewell screen, no timeline shift:
-        // the crew settled it on the radio, so the win is the flight out and the bar fading
-        // back in on the other side.
-        if (ghostLance.stage == com.astroloop.game.render.GhostShipLance.Stage.DONE) {
-            reckoningLanceDoneHold += dt
-            if (flyingHome) {
-                if (!reckoningFlyOffComplete) {
-                    turnShipToward((Math.PI / 2).toFloat(), dt)
-                    val speed = 300f   // matches the retreat fly-off
-                    ship.position.x += cos(ship.rotation) * speed * dt
-                    ship.position.y += sin(ship.rotation) * speed * dt
-                    // Real velocity so the thruster lights up for the departure
-                    ship.velocity.set(cos(ship.rotation) * speed, sin(ship.rotation) * speed)
-                    if (ship.position.y > camera.y + screenHeight + 100f) {
-                        reckoningFlyOffComplete = true
-                    }
-                } else {
-                    reckoningExitFadeTimer += dt
-                    globalFadeAlpha = (reckoningExitFadeTimer / 1.2f).coerceIn(0f, 1f)
-                    if (globalFadeAlpha >= 1f && !reckoningWinHandedOff) {
-                        reckoningWinHandedOff = true
-                        finishReckoningWin()
-                    }
-                }
-            }
-        }
-    }
-
-    /**
-     * Reckoning fight won: called once, after the lance completed and the scene has faded
-     * to black. Persists the win, then hands off to the hangar with the fade-in flag —
-     * resetForReturn arms fadeFromBlackTimer so the bar fades in from black instead of
-     * cutting. reckoningActive stays set so the (now fully black) lance stage keeps ticking
-     * harmlessly until MainActivity swaps the view out on the UI thread.
-     */
-    private fun finishReckoningWin() {
-        // crystal_released blocks any re-trigger; reckoning_just_won is the one-shot
-        // bar-chatter flag consumed by ChatSystem.onDeathReturn.
-        val persistence = PersistenceManager(context)
-        persistence.setCrystalReleased(true)
-        persistence.setAwaitingConvergence(false)
-        persistence.setReckoningJustWon(true)
-
-        SoundManager.stopAll()
-        saveRunStats(includeDeath = false)
-        onGameOver(0, true)
     }
 
     private fun startRetreat() {
@@ -3915,7 +3565,7 @@ class GameSurfaceView(
             state.luckyStarTimer += deltaTime
             if (state.luckyStarDimming) {
                 state.luckyStarDimTimer += deltaTime
-                if (state.luckyStarDimTimer >= 0.5f) {
+                if (state.luckyStarDimTimer >= LUCKY_STAR_HOLD_SECONDS) {
                     state.luckyStarAnimating = false
                     val option = upgradeSystem.selectOption(state.luckyStarSelectedIndex)
                     if (option != null) {
@@ -4950,7 +4600,7 @@ class GameSurfaceView(
                 if (state.heartToHeartCharTimer >= 0.04f) {
                     state.heartToHeartCharTimer = 0f
                     state.heartToHeartCharIndex++
-                    SoundManager.playSFX("sfx_text_tick", 0.15f, 0.9f + (Math.random().toFloat() * 0.2f))
+                    SoundManager.playSFX("sfx_text_tick", SoundManager.TEXT_TICK_VOLUME, 0.9f + (Math.random().toFloat() * 0.2f))
                     if (state.heartToHeartCharIndex > line.length) {
                         state.fleetChatterStep++
                         state.fleetChatterTimer = 0f
@@ -5033,8 +4683,9 @@ class GameSurfaceView(
 
         if (lineIndex < allLines.size) {
             val (speaker, line) = allLines[lineIndex]
-            // Desert good ending only — the reckoning win no longer routes through this phase
-            // (it fades straight from the flight scene to the bar)
+            // Desert good ending only. LoopDefinitions.CRYSTAL never actually appears in
+            // desertFarewellScript() — the branch exists for symmetry with the other
+            // speaker-to-color mappings, not because this script uses it.
             val color = when (speaker) {
                 LoopDefinitions.TB -> LoopDefinitions.TB_COLOR
                 LoopDefinitions.CRYSTAL -> CrystalPalette.MID
@@ -5052,7 +4703,7 @@ class GameSurfaceView(
                 if (state.heartToHeartCharTimer >= 0.04f) {
                     state.heartToHeartCharTimer = 0f
                     state.heartToHeartCharIndex++
-                    SoundManager.playSFX("sfx_text_tick", 0.15f, 0.9f + (Math.random().toFloat() * 0.2f))
+                    SoundManager.playSFX("sfx_text_tick", SoundManager.TEXT_TICK_VOLUME, 0.9f + (Math.random().toFloat() * 0.2f))
                     if (state.heartToHeartCharIndex > line.length) {
                         state.fleetChatterStep++
                         state.fleetChatterTimer = 0f
@@ -8323,6 +7974,18 @@ class GameSurfaceView(
         if (state.debugMenuOpen) {
             debugMenuRenderer.render(canvas, state)
         }
+
+        // Debug-only floating opener, drawn last and in RAW device pixels — no renderScale
+        // division. Gated here as well as at the touch site: the class is compiled into release
+        // either way and it is the trigger never being armed that makes it unreachable, which is
+        // the same argument the pause-hold's own comment makes at :9122.
+        if (BuildConfig.DEBUG) {
+            if (!debugButtonLoaded) {
+                debugButton.load(PersistenceManager(context), width.toFloat(), height.toFloat())
+                debugButtonLoaded = true
+            }
+            debugButton.draw(canvas)
+        }
     }
 
     private fun renderPlaying(canvas: Canvas) {
@@ -8489,49 +8152,6 @@ class GameSurfaceView(
             val targetX = pastAstro?.position?.x ?: ship.position.x
             val targetY = pastAstro?.position?.y ?: ship.position.y
             vectorRenderer.renderBossChargeOverlay(canvas, boss, targetX, targetY, state)
-        }
-
-        // Crystal reckoning boss (2× crystal Specter, world-space)
-        // NOTE: the canvas is already camera-translated here — draw at world coordinates.
-        // Subtracting the camera again doubled the offset, so the drawn ship drifted away
-        // from the true boss position (where the bullets emit) as the camera moved.
-        reckoningBoss?.let { rb ->
-            if (rb.isActive) {
-                val bx = rb.position.x
-                val by = rb.position.y
-                ShipRenderer.drawShip(
-                    canvas = canvas,
-                    shapeRenderer = shapeRenderer,
-                    x = bx, y = by,
-                    rotation = rb.rotation,
-                    size = rb.radius,
-                    shipColor = CrystalPalette.MID,
-                    pilotColor = CrystalPalette.ICE,
-                    startingWeaponId = "railgun"
-                )
-                // Crystal orb (MID glow + white core) seated in the tail notch — hull-local
-                // -0.40*R on the rail spine, below the cockpit, rotating with the ship
-                // (V3 on the placement board)
-                val time = (System.currentTimeMillis() % 10000L) / 1000f
-                val pulse = 0.7f + 0.3f * sin(time * 4f)
-                val orbX = bx + cos(rb.rotation) * (-0.40f * rb.radius)
-                val orbY = by + sin(rb.rotation) * (-0.40f * rb.radius)
-                reckoningOrbPaint.color = CrystalPalette.MID
-                reckoningOrbPaint.alpha = (pulse * 100).toInt()
-                canvas.drawCircle(orbX, orbY, 18f, reckoningOrbPaint)
-                reckoningOrbPaint.alpha = (pulse * 220).toInt()
-                canvas.drawCircle(orbX, orbY, 8f, reckoningOrbPaint)
-                reckoningOrbPaint.color = CrystalPalette.CORE
-                reckoningOrbPaint.alpha = (pulse * 255).toInt()
-                canvas.drawCircle(orbX, orbY, 4f, reckoningOrbPaint)
-            }
-        }
-
-        // Ghost-ship lance overlay (renders while reckoningStage == LANCE).
-        // Camera 0,0: the lance subtracts the camera internally, but this canvas is already
-        // camera-translated — passing the real camera would double the offset (off-screen).
-        if (state.reckoningActive && state.reckoningStage == GameState.ReckoningStage.LANCE) {
-            ghostLance.render(canvas, shapeRenderer, 0f, 0f, screenWidth, screenHeight)
         }
 
         // Render fleet ships (cinematic puppet ships)
@@ -8729,282 +8349,53 @@ class GameSurfaceView(
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        // The floating opener gets first refusal, in raw device pixels. Above the debug-menu
+        // block on purpose: the button must stay usable while the menu is open.
+        if (BuildConfig.DEBUG) {
+            when (debugButton.onTouch(event, width.toFloat(), height.toFloat())) {
+                DebugFloatingButton.Outcome.TAPPED -> {
+                    state.debugMenuOpen = !state.debugMenuOpen
+                    updateDebugStoryInfo()
+                    return true
+                }
+                DebugFloatingButton.Outcome.CONSUMED -> {
+                    // Persist only when a gesture actually moved the button. The latch is false
+                    // for every intermediate MOVE, so this is one write per drag rather than one
+                    // per frame — and a drag that ends by cancellation still saves.
+                    if (debugButton.consumeDirtyPosition()) debugButton.save(PersistenceManager(context))
+                    return true
+                }
+                DebugFloatingButton.Outcome.IGNORED -> Unit
+            }
+        }
+
         // Handle debug menu touch events when open
         if (state.debugMenuOpen) {
             val result = debugMenuRenderer.handleTouch(event, state)
-            when {
-                result == "RESET_SMALL" -> {
-                    val persistence = PersistenceManager(context)
-                    persistence.resetAllProgress()
-                    persistence.setYen(50)
-                    telemetryManager.clearLog()
-                    state.debugMenuOpen = false
-                    onGameOver(0, false)
-                }
-                result == "RESET_BIG" -> {
-                    val persistence = PersistenceManager(context)
-                    persistence.resetAllProgress()
-                    persistence.setYen(10_000_000)
-                    // resetAllProgress re-arms the first-launch intro, and the hangar's
-                    // first-launch branch opens by zeroing yen (HangarSurfaceView:297). Because
-                    // surfaceCreated is deferred it lands *after* the money is banked and wiped
-                    // it every time — a rich reset put you in the bar with 0. Marking the intro
-                    // done keeps the yen, and is right on its own terms: this reset exists to jump
-                    // to a late-game state, which is not something to sit through an opening for.
-                    persistence.setFirstLaunchComplete()
-                    persistence.setIntroDone()
-                    telemetryManager.clearLog()
-                    persistence.unlockAllShipsAndPilots()
-                    for (id in listOf("health", "shields", "speed", "damage", "crit", "yen_bonus", "salvage", "magnet")) {
-                        persistence.setUpgradeLevel(id, 5)
-                    }
-                    state.debugMenuOpen = false
-                    onGameOver(0, false)
-                }
-                result?.startsWith("EVOLVE:") == true -> {
-                    val parts = result.split(":")
-                    if (parts.size == 3) {
-                        val baseWeaponId = parts[1]
-                        val evolvedId = parts[2]
-                        weaponSystem.applyEvolution(baseWeaponId, evolvedId, state)
-                        state.hasEvolvedThisGame = true
-                        if (evolvedId == "autonomous_ace") {
-                            state.droneEvolved = true
+            if (result != null && !DebugActionDispatch.handle(result, state, PersistenceManager(context), debugHost)) {
+                when {
+                    result.startsWith("EVOLVE:") -> {
+                        val parts = result.split(":")
+                        if (parts.size == 3) {
+                            val baseWeaponId = parts[1]
+                            val evolvedId = parts[2]
+                            weaponSystem.applyEvolution(baseWeaponId, evolvedId, state)
+                            state.hasEvolvedThisGame = true
+                            if (evolvedId == "autonomous_ace") {
+                                state.droneEvolved = true
+                            }
                         }
                     }
-                }
-                result == "WEAPON_TOGGLE" -> {
-                    weaponSystem.syncFromState(state)
-                    state.recalculateStats()
-                }
-                result == "PASSIVE_TOGGLE" -> {
-                    state.recalculateStats()
-                }
-                result == "INSTANT_DEATH" -> {
-                    state.debugMenuOpen = false
-                    state.lastDamageSource = "debug_kill"
-                    ship.health = 0f
-                    handlePlayerDeath()
-                }
-                result == "BOSS_NOW" -> {
-                    state.survivalTime = Boss.SPAWN_TIME - 1f
-                    state.debugMenuOpen = false
-                }
-                result == "SET_CORRUPT" -> {
-                    val persistence = PersistenceManager(context)
-                    persistence.setStoryStageCode(StoryStage.CORRUPTION.code)
-                    state.debugMenuOpen = false
-                    onGameOver(0, false)
-                }
-                result == "KILL_PILOT" -> {
-                    val persistence = PersistenceManager(context)
-                    if (StoryStateManager.stage(persistence) == StoryStage.NORMAL) {
-                        persistence.setStoryStageCode(StoryStage.CORRUPTION.code)
-                    }
-                    val deadPilots = persistence.getDeadPilots()
-                    val nextAlive = PilotDefinitions.pilots
-                        .filter { it.id != "pilot_astro" && !deadPilots.contains(it.id) }
-                        .firstOrNull()
-                    if (nextAlive != null) {
-                        persistence.addDeadPilot(nextAlive.id)
-                        val shipId = StoryStateManager.getShipForPilot(nextAlive.id)
-                        if (shipId != null) persistence.addDeadShip(shipId)
-                    }
-                    updateDebugStoryInfo()
-                }
-                result == "KILL_ALL" -> {
-                    val persistence = PersistenceManager(context)
-                    if (StoryStateManager.stage(persistence) == StoryStage.NORMAL) {
-                        persistence.setStoryStageCode(StoryStage.CORRUPTION.code)
-                    }
-                    for (pilot in PilotDefinitions.pilots) {
-                        if (pilot.id == "pilot_astro") continue
-                        persistence.addDeadPilot(pilot.id)
-                        val shipId = StoryStateManager.getShipForPilot(pilot.id)
-                        if (shipId != null) persistence.addDeadShip(shipId)
-                    }
-                    if (StoryStateManager.shouldUnlockCrystal(persistence)) {
-                        persistence.setCrystalUnlocked(true)
-                    }
-                    updateDebugStoryInfo()
-                }
-                result == "BUY_CRYSTAL" -> {
-                    val persistence = PersistenceManager(context)
-                    if (StoryStateManager.stage(persistence) == StoryStage.NORMAL) {
-                        persistence.setStoryStageCode(StoryStage.CORRUPTION.code)
-                    }
-                    persistence.setCrystalUnlocked(true)
-                    persistence.setCrystalPurchased(true)
-                    updateDebugStoryInfo()
-                }
-                result == "RESET_STORY" -> {
-                    val persistence = PersistenceManager(context)
-                    persistence.setStoryStageCode(StoryStage.NORMAL.code)
-                    persistence.setStoryLoop(1)
-                    persistence.setCrystalUnlocked(false)
-                    persistence.setCrystalPurchased(false)
-                    persistence.clearDeadPilotsAndShips()
-                    persistence.clearCrystalBroken()
-                    updateDebugStoryInfo()
-                }
-                result == "GRANT_BANDANAS" -> {
-                    val persistence = PersistenceManager(context)
-                    for (pilot in PilotDefinitions.pilots) persistence.addBandana(pilot.id)
-                    persistence.setAwaitingConvergence(true)
-                    updateDebugStoryInfo()
-                }
-                result == "CLEAR_BANDANAS" -> {
-                    val persistence = PersistenceManager(context)
-                    persistence.clearAllBandanas()
-                    persistence.clearPendingBandanaPilot()
-                    persistence.setAwaitingConvergence(false)
-                    persistence.setCrystalReleased(false)
-                    updateDebugStoryInfo()
-                }
-                result == "CLEAR_TELEMETRY" -> {
-                    telemetryManager.clearLog()
-                }
-                result == "UNBRICK" -> {
-                    val persistence = PersistenceManager(context)
-                    if (persistence.isCrystalBroken()) {
-                        persistence.clearCrystalBroken()
-                        updateDebugStoryInfo()
-                    }
-                }
-                result == "CRYSTAL_OPENING" -> {
-                    state.debugMenuOpen = false
-                    state.survivalTime = 0f
-                    state.astroLoopMode = true
-                    state.phase = GamePhase.PLAYING
-                    startReckoningOpening()
-                }
-                result == "CRYSTAL_FIGHT" -> {
-                    state.debugMenuOpen = false
-                    state.survivalTime = 0f
-                    state.astroLoopMode = true
-                    state.phase = GamePhase.PLAYING
-                    startReckoningFight()
-                }
-                result == "CRYSTAL_RELEASE" -> {
-                    state.debugMenuOpen = false
-                    state.survivalTime = 0f
-                    state.astroLoopMode = true
-                    state.phase = GamePhase.PLAYING
-                    startReckoningFight()
-                    onReckoningSurvived()   // skip 90s fight, jump straight to ghost-ship lance
-                }
-                result == "PLAY_DESERT" -> {
-                    state.debugMenuOpen = false
-                    initializeDesert()
-                    state.phase = GamePhase.DESERT
-                }
-                result == "PLAY_DESERT_P2" -> {
-                    state.debugMenuOpen = false
-                    initializeDesert()
-                    state.desertTimer = 120f
-                    state.desertPhase = 1
-                    state.phase = GamePhase.DESERT
-                }
-                result == "DESERT_CRYSTAL" -> {
-                    state.debugMenuOpen = false
-                    initializeDesert()
-                    state.phase = GamePhase.DESERT
-                    state.desertPhase = 3
-                    state.desertCrystalPhase = 1
-                }
-                result == "TOGGLE_ASTRO_LOOP" -> {
-                    val persistence = PersistenceManager(context)
-                    if (StoryStateManager.isAstroLoop(persistence)) {
-                        persistence.setStoryStageCode(StoryStage.NORMAL.code)
-                    } else {
-                        persistence.setStoryStageCode(StoryStage.ASTRO_LOOP.code)
-                    }
-                    state.astroLoopMode = StoryStateManager.isAstroLoop(persistence)
-                    updateDebugStoryInfo()
-                }
-                result == "RECKONING_ROUNDS_INC" -> {
-                    val p = PersistenceManager(context)
-                    p.setReckoningRounds((p.getReckoningRounds() + 1) % 25)
-                    updateDebugStoryInfo()
-                }
-                result == "SET_DESERT_FLAGS" -> {
-                    val persistence = PersistenceManager(context)
-                    persistence.setDesertCompleted()
-                    persistence.setDesertGoodEnding()
-                    updateDebugStoryInfo()
-                }
-                result == "CLR_DESERT" -> {
-                    val persistence = PersistenceManager(context)
-                    persistence.clearDesertCompleted()
-                    persistence.clearDesertGoodEnding()
-                    updateDebugStoryInfo()
-                }
-                result == "SET_LOOP_1" -> {
-                    val persistence = PersistenceManager(context)
-                    persistence.setStoryLoop(1)
-                    state.storyLoop = 1
-                    updateDebugStoryInfo()
-                }
-                result == "SET_LOOP_2" -> {
-                    val persistence = PersistenceManager(context)
-                    persistence.setStoryLoop(2)
-                    state.storyLoop = 2
-                    updateDebugStoryInfo()
-                }
-                result == "SET_LOOP_3" -> {
-                    val persistence = PersistenceManager(context)
-                    persistence.setStoryLoop(3)
-                    state.storyLoop = 3
-                    updateDebugStoryInfo()
-                }
-                result?.startsWith("TUNING_SET:") == true -> {
-                    val setName = result.substringAfter("TUNING_SET:")
-                    debugMenuRenderer.tuningPreviewSet = setName
-                    if (debugMenuRenderer.tuningBGMPlaying) {
-                        SoundManager.stopDebugBGM()
-                        SoundManager.playDebugBGM(context, setName)
-                    }
-                }
-                result == "TUNING_BGM_TOGGLE" -> {
-                    if (debugMenuRenderer.tuningBGMPlaying) {
-                        SoundManager.stopDebugBGM()
-                        SoundManager.clearTuningAutoPlay()
-                        debugMenuRenderer.tuningBGMPlaying = false
-                    } else {
-                        SoundManager.playDebugBGM(context, debugMenuRenderer.tuningPreviewSet)
-                        debugMenuRenderer.tuningBGMPlaying = true
-                    }
-                }
-                result?.startsWith("TUNING_VOL:") == true -> {
-                    val parts = result.substringAfter("TUNING_VOL:").split(":")
-                    val weaponIndex = parts[0].toInt()
-                    val buttonIndex = parts[1].toInt()
-                    val weaponId = debugMenuRenderer.tuningWeapons[weaponIndex]
-                    val beatSel = debugMenuRenderer.tuningBeatSelections[weaponId] ?: 5
-                    // Play preview at selected volume
-                    SoundManager.playSFX("sfx_weapon_$weaponId", SoundManager.getTuningVolume(buttonIndex), 1.0f, isSoundboard = true)
-                    // Toggle/update auto-play if BGM is playing
-                    if (debugMenuRenderer.tuningBGMPlaying) {
-                        if (SoundManager.tuningAutoPlay.containsKey(weaponId)) {
-                            SoundManager.updateTuningSettings(weaponId, buttonIndex, beatSel)
-                        } else {
-                            SoundManager.toggleTuningAutoPlay(weaponId, buttonIndex, beatSel)
-                        }
-                    }
-                }
-                result?.startsWith("TUNING_BEAT:") == true -> {
-                    val parts = result.substringAfter("TUNING_BEAT:").split(":")
-                    val weaponIndex = parts[0].toInt()
-                    val buttonIndex = parts[1].toInt()
-                    val weaponId = debugMenuRenderer.tuningWeapons[weaponIndex]
-                    val volSel = debugMenuRenderer.tuningVolSelections[weaponId] ?: 5
-                    // Toggle/update auto-play if BGM is playing
-                    if (debugMenuRenderer.tuningBGMPlaying) {
-                        if (SoundManager.tuningAutoPlay.containsKey(weaponId)) {
-                            SoundManager.updateTuningSettings(weaponId, volSel, buttonIndex)
-                        } else {
-                            SoundManager.toggleTuningAutoPlay(weaponId, volSel, buttonIndex)
-                        }
+                    result.startsWith("RECKONING_PHASE_") -> {
+                        state.debugMenuOpen = false
+                        // The ARCADE page's second phase row is the same jump at lap 2 — see
+                        // DebugMenuRenderer's arcadeLap2PhaseRects — carried as a "_LAP2"
+                        // suffix on the same action string rather than a whole new one.
+                        val rest = result.removePrefix("RECKONING_PHASE_")
+                        val lap = if (rest.endsWith("_LAP2")) 2 else 1
+                        val phase = rest.removeSuffix("_LAP2").toIntOrNull() ?: 0
+                        CabinetDebugIntent.request(CabinetDebugIntent.Action.RECKONING, phase, lap)
+                        onGameOver(0, false)
                     }
                 }
             }
@@ -9108,19 +8499,7 @@ class GameSurfaceView(
         return touchController.handleTouchEvent(event)
     }
 
-    private fun updateDebugStoryInfo() {
-        val persistence = PersistenceManager(context)
-        state.debugStoryPhase = persistence.getStoryStageCode()
-        state.debugDeadPilotCount = persistence.getDeadPilots().size
-        state.debugCrystalUnlocked = persistence.isCrystalUnlocked()
-        state.debugArcCompleted = StoryStateManager.hasLoopedBefore(persistence)
-        state.debugCrystalBroken = persistence.isCrystalBroken()
-        state.debugDesertCompleted = persistence.isDesertCompleted()
-        state.debugDesertGoodEnding = persistence.hasDesertGoodEnding()
-        state.debugStoryLoop = persistence.getStoryLoop()
-        state.debugAstroLoopMode = StoryStateManager.isAstroLoop(persistence)
-        state.debugReckoningRounds = persistence.getReckoningRounds()
-    }
+    private fun updateDebugStoryInfo() = DebugMirror.populate(state, PersistenceManager(context))
 
     /** The crystal pause overlay is story-gated: normal runs always, corruption only
      *  when flying as Astro (he carries the crystal), astro loop never — the other
@@ -9170,9 +8549,7 @@ class GameSurfaceView(
                 pauseDebugHoldTimer = 0f
                 state.isPaused = false
                 state.debugMenuOpen = true
-                lastDebugMenuPage = state.debugMenuPage
                 updateDebugStoryInfo()
-                if (state.debugMenuPage == 4) SoundManager.muteBGMForDebug()
                 return
             }
         }

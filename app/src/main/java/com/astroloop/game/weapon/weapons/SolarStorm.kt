@@ -44,7 +44,13 @@ class SolarStorm : Weapon(
             it.isActive &&
             it.position.x > firer.position.x - halfW && it.position.x < firer.position.x + halfW &&
             it.position.y > firer.position.y - halfH && it.position.y < firer.position.y + halfH &&
-            (it !is Asteroid || it.fragmentImmunityTimer <= 0f)
+            (it !is Asteroid || it.fragmentImmunityTimer <= 0f) &&
+            // The boss's own gate, applied here too. This is the one weapon that damages by
+            // calling takeDamage directly rather than by landing a projectile, so it never met the
+            // invulnerable/shielded check in the projectile-boss loop — which meant it struck
+            // through the deflector shield that stops every other weapon, and drew a teleporting
+            // dodge out of a boss that was supposed to be untouchable.
+            (it !is Boss || (!it.isInvulnerable && !it.shielded))
         }.shuffled().take(targetCount)
 
         val weaponColor = ShipDefinitions.getWeaponColor("solar_storm", state.isCorruptionRun)

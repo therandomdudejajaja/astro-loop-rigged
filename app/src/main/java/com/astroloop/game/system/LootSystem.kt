@@ -165,7 +165,10 @@ class LootSystem(
 
     private fun upgradeableWeaponIds(): List<String> =
         WeaponDefinitions.getBaseWeapons().filter { def ->
-            def.id in unlockedWeaponIds && (
+            // An evolved-away base is not upgradeable, and saying otherwise spawns a drop the
+            // card generator will refuse: the pickup appears, the sound plays, and nothing
+            // happens. UpgradeSystem already filters these; this path was missed.
+            def.id in unlockedWeaponIds && !state.hasEvolutionOf(def.id) && (
                 (state.getWeaponLevel(def.id) > 0 && state.getWeaponLevel(def.id) < GameConfig.WEAPON_MAX_LEVEL) ||
                 (state.getWeaponLevel(def.id) == 0 && state.canAddNewWeapon())
             )

@@ -44,6 +44,14 @@ class UpgradeSelectionRenderer {
         color = 0xFF111122.toInt()
     }
 
+    // SHARED, MUTABLE PAINTS — every draw must set every property it depends on.
+    //
+    // These are reused across all three card renderers and mutated in place by both the card
+    // code and fitTextSize(), which drives textSize down to 14f. Three cards are drawn per
+    // selection screen, so a draw that reads a property it never sets renders differently
+    // depending on what was drawn beside it. That is not a hypothetical: the evolution card's
+    // ingredient line inherited its size and colour from the previous card for exactly this
+    // reason, and looked wrong in a way nobody could pin down.
     private val textPaint = Paint().apply {
         isAntiAlias = true
         color = GameConfig.COLOR_HUD
@@ -120,6 +128,9 @@ class UpgradeSelectionRenderer {
         textAlign = Paint.Align.CENTER
     }
 
+    /** The grey every card description is drawn in. Named because three sites set it. */
+    private val DESCRIPTION_GREY = 0xFFCCCCCC.toInt()
+
     private val dimOverlayPaint = Paint().apply {
         style = Paint.Style.FILL
         color = 0x99000000.toInt()
@@ -173,21 +184,26 @@ class UpgradeSelectionRenderer {
             }
         }
 
-        // Lucky Star dimming overlay — darken non-highlighted cards
+        // Lucky Star: every card but the lit one is dimmed, at one weight, throughout.
+        //
+        // The losers used to FADE to that weight across the whole hold, and the effect was the
+        // opposite of what it was for. They are already dimmed while the highlight is bouncing,
+        // so at the moment the bounce settled the ramp restarted from zero — the nine cards
+        // that just lost snapped back to full brightness and then took the entire 1.25s to
+        // sink again, which is precisely the window the hold exists to make readable. Owner,
+        // playtesting: dim them right away so it is obvious what won.
+        //
+        // The winner is exempt once the bounce has settled on it, and until then it is
+        // whichever card the highlight is passing over. That is the only thing the two phases
+        // now differ by.
         if (state.luckyStarAnimating) {
+            val lit =
+                if (state.luckyStarDimming) state.luckyStarSelectedIndex
+                else state.luckyStarCurrentHighlight
             for ((index, rect) in cardRects.withIndex()) {
-                if (state.luckyStarDimming) {
-                    if (index != state.luckyStarSelectedIndex) {
-                        val dimAlpha = (state.luckyStarDimTimer / 0.5f).coerceIn(0f, 1f)
-                        dimOverlayPaint.alpha = (dimAlpha * 153).toInt()
-                        canvas.drawRect(rect, dimOverlayPaint)
-                    }
-                } else {
-                    if (index != state.luckyStarCurrentHighlight) {
-                        dimOverlayPaint.alpha = 0x99
-                        canvas.drawRect(rect, dimOverlayPaint)
-                    }
-                }
+                if (index == lit) continue
+                dimOverlayPaint.alpha = 0x99
+                canvas.drawRect(rect, dimOverlayPaint)
             }
         }
 
@@ -237,6 +253,7 @@ class UpgradeSelectionRenderer {
         }
         fitTextSize(name, rect.width() - 20f, textPaint, 28f)
         textPaint.textAlign = Paint.Align.CENTER
+        textPaint.color = GameConfig.COLOR_HUD
         canvas.drawText(name, centerX, y, textPaint)
 
         y += 32f
@@ -270,7 +287,7 @@ class UpgradeSelectionRenderer {
         // --- CONTENT: Description (NEW) or Bonus (upgrade) ---
         smallTextPaint.textAlign = Paint.Align.CENTER
         smallTextPaint.textSize = 22f
-        smallTextPaint.color = 0xFFCCCCCC.toInt()
+        smallTextPaint.color = DESCRIPTION_GREY
 
         if (currentLevel == 0) {
             // NEW item: Show description
@@ -371,11 +388,14 @@ class UpgradeSelectionRenderer {
 
                 // Title
                 textPaint.textSize = 26f
+                textPaint.color = GameConfig.COLOR_HUD
                 canvas.drawText("HEAL", centerX, y, textPaint)
                 y += 40f
 
                 // Description
                 smallTextPaint.textAlign = Paint.Align.CENTER
+                smallTextPaint.textSize = 22f
+                smallTextPaint.color = DESCRIPTION_GREY
                 canvas.drawText("Restore 20%", centerX, y, smallTextPaint)
                 y += 24f
                 canvas.drawText("of max health", centerX, y, smallTextPaint)
@@ -394,11 +414,14 @@ class UpgradeSelectionRenderer {
 
                 // Title
                 textPaint.textSize = 26f
+                textPaint.color = GameConfig.COLOR_HUD
                 canvas.drawText("¥ BONUS", centerX, y, textPaint)
                 y += 40f
 
                 // Description
                 smallTextPaint.textAlign = Paint.Align.CENTER
+                smallTextPaint.textSize = 22f
+                smallTextPaint.color = DESCRIPTION_GREY
                 canvas.drawText("+1% bonus yen", centerX, y, smallTextPaint)
             }
             null -> {}
@@ -428,17 +451,25 @@ class UpgradeSelectionRenderer {
 
         y += 35f
 
-        // Base weapon name
-        val baseName = WeaponDefinitions.getWeaponDisplayName(option.baseWeaponId ?: "")
+        // The two ingredients, drawn identically — same paint, same size, same colour.
+        //
+        // The passive used to be drawn with smallTextPaint while the weapon used textPaint, which
+        // made them differ in size and colour. Worse, nothing set smallTextPaint's size or colour
+        // before this draw — only its alignment — and that paint is shared and mutated all over
+        // this file (the description pass below drives it down to 14f via fitTextSize). So the
+        // passive rendered at whatever the previously drawn card happened to leave behind, and
+        // three cards are drawn per screen. Reading "SOLAR STORM + PHOENIX CORE" as one recipe
+        // requires both halves to look like they belong to it.
         textPaint.textSize = 18f
+        textPaint.color = GameConfig.COLOR_HUD
+
+        val baseName = WeaponDefinitions.getWeaponDisplayName(option.baseWeaponId ?: "")
         canvas.drawText(baseName, centerX, y, textPaint)
 
         y += 25f
 
-        // + Passive name
         val passiveName = PassiveDefinitions.getDisplayName(option.requiredPassiveId ?: "", state.activePilotId, state.astroLoopMode)
-        smallTextPaint.textAlign = Paint.Align.CENTER
-        canvas.drawText("+ $passiveName", centerX, y, smallTextPaint)
+        canvas.drawText("+ $passiveName", centerX, y, textPaint)
 
         y += 30f
 
@@ -472,6 +503,9 @@ class UpgradeSelectionRenderer {
         // paint is shared, so wrapping against whatever the last card left behind made the line
         // breaks depend on what had been drawn previously.
         smallTextPaint.textSize = 22f
+        // And the colour, for the same reason: this card inherited 0xFFCCCCCC when an ordinary
+        // card had been drawn first and its own constructed 0xFFAAAAAA when it had not.
+        smallTextPaint.color = DESCRIPTION_GREY
         val lines = wrapText(description, rect.width() - 30f, smallTextPaint)
         for (line in TextWrap.clamp(lines, 2)) {
             fitTextSize(line, rect.width() - 30f, smallTextPaint, 22f)

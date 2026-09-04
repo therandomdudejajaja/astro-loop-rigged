@@ -17,21 +17,22 @@ class Boss : Entity() {
         const val BOSS_SIZE = 25f    // Matches GameConfig.SHIP_BASE_SIZE — mirror player ship size
         const val BASE_SPEED = 280f
         const val MAX_SPEED = 350f
-        const val CENTER_APPROACH_SPEED = 450f  // death-retreat glide-to-centre speed (px/s)
-        const val CENTER_ARRIVE_EPS = 4f        // snap-and-plant threshold (px)
         const val PREFERRED_DISTANCE = 300f
         const val CLOSE_DISTANCE = 200f
-        // Reckoning hold-pattern (Touhou stable-emitter): chase hard only beyond the leash,
-        // ease out of point-blank, otherwise drift slowly so the spiral geometry stays readable.
-        const val HOLD_LEASH = 520f       // beyond this: close at 105% — flying away stays impossible
-        const val HOLD_STANDOFF = 260f    // inside this: ease back out — bullets never spawn point-blank
-        const val HOLD_DRIFT_SPEED = 70f  // in the band: slow orbit, no lunges, no strafe jitter
         const val RAIL_DAMAGE = 40f
         const val RAIL_SPEED = 800f
         const val RAIL_COOLDOWN = 1.8f
         const val RECALL_PAUSE_TIME = 1.0f
         const val AFTERIMAGE_DURATION = 0.3f
         const val AFTERIMAGE_DODGE_DISTANCE = 60f
+        /**
+         * Minimum seconds between dodges.
+         *
+         * The dodge is a flourish that says "that shot missed", so it wants to be legible, not
+         * continuous. Without a floor, any damage source that resolves more than once per frame
+         * teleports the boss once per hit — Solar Storm does exactly that, five times a volley.
+         */
+        const val AFTERIMAGE_COOLDOWN = 1.0f
         const val HEALTH_REGEN_RATE = 5f
         const val SHIELD_REGEN_RATE = 8f
         const val BOSS_MAX_HEALTH = 3000f
@@ -65,6 +66,7 @@ class Boss : Entity() {
     var afterimageX = 0f
     var afterimageY = 0f
     var afterimageRotation = 0f
+    var afterimageCooldown = 0f
 
     // Shield (boss-specific, separate from Entity.health/maxHealth)
     var shield = BOSS_MAX_SHIELD
@@ -74,11 +76,6 @@ class Boss : Entity() {
     var isInvulnerable = true
     var regenActive = true
     var isStunned = false
-
-    // Death-retreat centring: glide to the frozen view's centre, then plant (stun) there.
-    private var isCentering = false
-    private var centerTargetX = 0f
-    private var centerTargetY = 0f
 
     // EMP rush-in (normal run) — pursuit driven here, sequencing in GameSurfaceView
     var isRushing = false
@@ -92,9 +89,6 @@ class Boss : Entity() {
 
     // Fleet shield — boss is invulnerable until fleet is defeated
     var shielded: Boolean = false
-
-    // Reckoning hold-pattern — replaces the STRAFING/CLOSING/CHARGING AI with a stable emitter
-    var holdPattern = false
 
     // Shield deflection sparks — saw-hit style; updated independently of Boss.update()
     // so they still tick while the boss is stunned during the charge.
@@ -145,6 +139,7 @@ class Boss : Entity() {
         wantsToFire = false
         afterimageActive = false
         afterimageTimer = 0f
+        afterimageCooldown = 0f
         shieldTickTimer = 0f
         isInvulnerable = true
         isStunned = false
@@ -153,7 +148,6 @@ class Boss : Entity() {
         rushSpeed = 0f
         rushTimer = 0f
         reentryBurn.clear()
-        holdPattern = false
         maxHealth = BOSS_MAX_HEALTH
         health = maxHealth
         shield = BOSS_MAX_SHIELD
@@ -168,19 +162,6 @@ class Boss : Entity() {
         isRushing = false
         rushBraking = false
         velocity.set(0f, 0f)
-        wantsToFire = false
-    }
-
-    /**
-     * Reckoning death beat: glide toward ([tx],[ty]) — the frozen view's centre — then plant
-     * (stun) on arrival. Rotation keeps tracking the fleeing player via [update]'s aim step.
-     */
-    fun startCenterApproach(tx: Float, ty: Float) {
-        isCentering = true
-        centerTargetX = tx
-        centerTargetY = ty
-        isRushing = false
-        rushBraking = false
         wantsToFire = false
     }
 
@@ -200,6 +181,7 @@ class Boss : Entity() {
 
     override fun update(deltaTime: Float) {
         if (!isActive) return
+        if (afterimageCooldown > 0f) afterimageCooldown -= deltaTime
         val player = targetPlayer ?: return  // needed for rotation even when stunned
 
         // Always track player — rotation runs even during charge stun
@@ -211,26 +193,6 @@ class Boss : Entity() {
             emitting = isRushing && !rushBraking)
 
         if (isStunned) return  // Boss is frozen — no AI, no movement, no firing
-
-        // Death-retreat centring: glide straight to the frozen view's centre, then plant there.
-        // Runs before the normal AI/rush logic and skips it entirely while active.
-        if (isCentering) {
-            wantsToFire = false
-            val dx = centerTargetX - position.x
-            val dy = centerTargetY - position.y
-            val d = sqrt(dx * dx + dy * dy)
-            if (d <= CENTER_ARRIVE_EPS) {
-                position.x = centerTargetX
-                position.y = centerTargetY
-                isCentering = false
-                stun()
-            } else {
-                val step = (CENTER_APPROACH_SPEED * deltaTime).coerceAtMost(d)
-                position.x += dx / d * step
-                position.y += dy / d * step
-            }
-            return
-        }
 
         timeAlive += deltaTime
         enginePulse += deltaTime * 6f
@@ -248,40 +210,6 @@ class Boss : Entity() {
                 val spd = rushSpeed * BossRush.easeIn(rushTimer)
                 velocity.set(dx / d * spd, dy / d * spd)
             }
-            position.x += velocity.x * deltaTime
-            position.y += velocity.y * deltaTime
-            clampMinDistance(player)
-            return
-        }
-
-        // Reckoning hold-pattern: a Touhou stage boss adapted to free flight. The pattern is
-        // the fight, not the chase — bullets already outrun the player (CrystalFightSystem
-        // speed guard), so the chase exists only to keep the fight on screen. Leash chase
-        // can't be outrun, the standoff keeps the emitter off the player's face, and the
-        // in-band drift is slow enough that the spiral geometry stays readable.
-        if (holdPattern) {
-            wantsToFire = false
-            val dx = player.position.x - position.x
-            val dy = player.position.y - position.y
-            val dist = sqrt(dx * dx + dy * dy).coerceAtLeast(1f)
-            val nx = dx / dist
-            val ny = dy / dist
-            val target = when {
-                dist > HOLD_LEASH -> {
-                    val s = player.speed * 1.05f
-                    Vector2(nx * s, ny * s)
-                }
-                dist < HOLD_STANDOFF -> {
-                    val s = player.speed * 0.4f
-                    Vector2(-nx * s, -ny * s)
-                }
-                else -> Vector2(
-                    -ny * strafeDirection * HOLD_DRIFT_SPEED,
-                    nx * strafeDirection * HOLD_DRIFT_SPEED
-                )
-            }
-            velocity.x += (target.x - velocity.x) * 3f * deltaTime
-            velocity.y += (target.y - velocity.y) * 3f * deltaTime
             position.x += velocity.x * deltaTime
             position.y += velocity.y * deltaTime
             clampMinDistance(player)
@@ -404,6 +332,8 @@ class Boss : Entity() {
     }
 
     fun triggerAfterimage() {
+        if (afterimageCooldown > 0f) return
+        afterimageCooldown = AFTERIMAGE_COOLDOWN
         afterimageX = position.x
         afterimageY = position.y
         afterimageRotation = rotation
@@ -431,7 +361,6 @@ class Boss : Entity() {
         shieldTickTimer = 0f
         isInvulnerable = true
         isStunned = false
-        isCentering = false
         maxHealth = BOSS_MAX_HEALTH
         health = maxHealth
         shield = BOSS_MAX_SHIELD
@@ -443,7 +372,6 @@ class Boss : Entity() {
         rushBraking = false
         rushSpeed = 0f
         rushTimer = 0f
-        holdPattern = false
         reentryBurn.clear()
         shieldSparks.clear()
     }

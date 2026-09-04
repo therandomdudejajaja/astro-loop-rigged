@@ -43,22 +43,11 @@ class BandanaPersistenceTest {
     }
 
     @Test
-    fun awaitingConvergenceRoundTrip() {
-        assertFalse(p.isAwaitingConvergence())
-        p.setAwaitingConvergence(true)
-        assertTrue(p.isAwaitingConvergence())
-        p.setAwaitingConvergence(false)
-        assertFalse(p.isAwaitingConvergence())
-    }
-
-    @Test
     fun resetAllProgressClearsBandanaState() {
         p.addBandana("pilot_dash")
         p.setPendingBandanaPilot("pilot_dash")
-        p.setAwaitingConvergence(true)
         p.resetAllProgress()
         assertEquals(0, p.getBandanaCount())
         assertNull(p.getPendingBandanaPilot())
-        assertFalse(p.isAwaitingConvergence())
     }
 }

@@ -1,5 +1,6 @@
 package com.astroloop.game.core
 
+import com.astroloop.game.data.WeaponDefinitions
 import com.astroloop.game.entity.Entity
 
 enum class GamePhase {
@@ -34,7 +35,6 @@ class GameState {
 
     // Phase 4 debug display (updated each frame from persistence)
     var debugStoryPhase: Int = 0
-    var debugReckoningRounds: Int = 0
     var debugDeadPilotCount: Int = 0
     var debugCrystalUnlocked: Boolean = false
     var debugArcCompleted: Boolean = false
@@ -155,7 +155,6 @@ class GameState {
     var radioTimer: Float = 0f           // Time remaining to display
     var radioFadeTimer: Float = 0f       // Fade-out countdown
     var radioIsCorrupted: Boolean = false // True = corrupted crew portrait
-    var radioIsGhost: Boolean = false     // True = show the muted ghost portrait (reckoning climax)
     var radioBoss: Boolean = false        // True = show portrait_boss (corrupted Astro / boss chatter)
 
     /** Astro Loop only: the active pilot's earned bandana shows on their own radio lines. */
@@ -320,19 +319,6 @@ class GameState {
     var phoenixShockwavePrevRadius: Float = 0f
     var phoenixShockwaveRadius: Float = 0f
 
-    // Bandana finale — crystal reckoning (transient; not persisted).
-    // LANCE is terminal on a win: the scene fades to black in place and hands off to the hangar.
-    enum class ReckoningStage { NONE, OPENING, FIGHT, LANCE }
-    var reckoningActive: Boolean = false
-    var reckoningStage: ReckoningStage = ReckoningStage.NONE
-    var reckoningTimer: Float = 0f
-    /** Retry after a failed attempt: skip the opening monologue to its final "Time to close it." line. */
-    var reckoningSkipOpening: Boolean = false
-
-    // Loadout lockout during reckoning fight (weapons / passive effects disabled)
-    var weaponsDisabled: Boolean = false
-    var passivesDisabled: Boolean = false
-
     // Permanent upgrades (meta-progression, persist across runs)
     // Each level gives: Health +10, Shields +10, Speed +5%, Damage +5%, Fire Rate +5%
     var permanentHealthLevel: Int = 0      // 0-5, +10 HP per level
@@ -443,11 +429,6 @@ class GameState {
         heartToHeartCharTimer = 0f
         hasEvolvedThisGame = false
 
-        // Reckoning fight loadout lockout — clear on new run
-        weaponsDisabled = false
-        passivesDisabled = false
-        reckoningSkipOpening = false
-
         // Desert reset
         desertPhase = 0
         desertTimer = 0f
@@ -485,7 +466,6 @@ class GameState {
         radioTimer = 0f
         radioFadeTimer = 0f
         radioIsCorrupted = false
-        radioIsGhost = false
         pilotRadioCooldown = 0f
         corruptedRadioCooldown = 0f
         lastCorruptedPilotIndex = -1
@@ -595,6 +575,39 @@ class GameState {
 
     fun addEvolution(evolutionId: String) {
         evolvedWeapons.add(evolutionId)
+    }
+
+    /**
+     * Swap [oldId] for [newId] **in place**, keeping the slot the player has been reading all run.
+     *
+     * weaponLevels is a linkedMapOf precisely because HUDRenderer draws its keys in order. Removing
+     * and re-adding moved the weapon to the end of the grid at the moment it evolved, which reads
+     * as a bug even when the weapon works.
+     *
+     * If [oldId] is not held, [newId] is appended — an evolution should still arrive.
+     */
+    fun replaceWeapon(oldId: String, newId: String, level: Int) {
+        if (!weaponLevels.containsKey(oldId)) {
+            weaponLevels[newId] = level
+            return
+        }
+        val rebuilt = linkedMapOf<String, Int>()
+        for ((id, lvl) in weaponLevels) {
+            if (id == oldId) rebuilt[newId] = level else rebuilt[id] = lvl
+        }
+        weaponLevels.clear()
+        weaponLevels.putAll(rebuilt)
+    }
+
+    /**
+     * Whether [baseWeaponId] has already been evolved this run.
+     *
+     * The evolution consumes the base, so `getWeaponLevel(base)` drops to zero — which read to the
+     * drop table as "the player does not have this weapon yet" and offered it back as a fresh pick.
+     */
+    fun hasEvolutionOf(baseWeaponId: String): Boolean {
+        val evolvedId = WeaponDefinitions.getWeaponDef(baseWeaponId)?.evolutionWeaponId ?: return false
+        return evolvedWeapons.contains(evolvedId)
     }
 
     fun getWeaponLevel(weaponId: String): Int = weaponLevels[weaponId] ?: 0

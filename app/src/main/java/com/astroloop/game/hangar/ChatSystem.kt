@@ -9,7 +9,6 @@ import com.astroloop.game.data.CrystalFightLines
 import com.astroloop.game.data.LoopDefinitions
 import com.astroloop.game.data.TutorialDefinitions
 import com.astroloop.game.data.PilotDefinitions
-import com.astroloop.game.data.ReckoningRoundChatter
 import kotlin.random.Random
 
 class ChatSystem {
@@ -76,8 +75,6 @@ class ChatSystem {
 
     private val maxMessages = 20
     private var lastSpeaker: String = ""
-
-    private val DESERT_FORESHADOW_CHANCE = 0.2f
 
     // No-repeat tracking — cleared on run return
     private val usedConversations = mutableSetOf<BarConversation>()
@@ -414,6 +411,25 @@ class ChatSystem {
             return
         }
 
+        // NOTHING UNAUTHORED SPEAKS DURING THE INTRO CINEMATIC.
+        //
+        // The first-launch opening is three authored beats — TB-26's greeting, Medic
+        // volunteering over the empty roster, and the swipe hint if the player has not moved
+        // — and an idle line landing between them would read as the bar talking over its own
+        // introduction.
+        //
+        // It happens to be silent today, but only because three unrelated constants coincide:
+        // conversationCooldown starts at 15f and is reset to CONVERSATION_COOLDOWN when
+        // Medic's line completes, the picker needs two unlocked pilots and only Medic exists,
+        // and shouldShowHints() needs a run behind you. Any of those moving in a balance pass
+        // would put chatter on top of the beat, so this is a rule rather than a coincidence.
+        //
+        // PLACEMENT IS LOAD-BEARING, BOTH WAYS. Above the active-conversation branch, this
+        // would silence the authored beats themselves. Below the cooldown decrement, the
+        // cooldown would burn down invisibly through the intro and the bar would resume on a
+        // different clock than it would otherwise have had.
+        if (state.introCinematic) return
+
         // Fire shield discovery conversation when first entering Astro Loop mode
         if (StoryStateManager.isAstroLoop(state.persistence) && !state.persistence.isAstroLoopShieldConvoShown()) {
             onAstroLoopFirstEntry(state)
@@ -643,24 +659,6 @@ class ChatSystem {
         val speakers = eligibleIdleSpeakers(state, corrupted, onBarPage, selectedCallsign)
         if (speakers.isEmpty()) return
 
-        // Desert-town foreshadowing (Astro Loop, 6+ bandanas) — rare, pre-empts the normal one-liner.
-        // Silenced for good once the reckoning is won: the thing out there is resolved.
-        if (StoryStateManager.isAstroLoop(state.persistence) && !state.persistence.isCrystalReleased()) {
-            val tier = LoopDefinitions.desertForeshadowing(state.persistence.getBandanaCount())
-            if (tier != null && Random.nextFloat() < DESERT_FORESHADOW_CHANCE) {
-                val pilotSpeaker = speakers.filter { it != "TB-26" }.randomOrNull()
-                val pilot = PilotDefinitions.pilots.find { it.callsign == pilotSpeaker }
-                if (Random.nextFloat() < 0.5f || pilot == null) {
-                    state.addChatMessage(tbName, tier.tobarLines.random(), 0xFF88AACC.toInt())
-                    lastSpeaker = "TB-26"
-                } else {
-                    state.addChatMessage(pilot.callsign, tier.pilotLines.random(), pilot.color)
-                    lastSpeaker = pilot.callsign
-                }
-                return
-            }
-        }
-
         val postHorror = state.persistence.isDesertCompleted() && !state.persistence.hasDesertGoodEnding()
         val secondLoop = StoryStateManager.hasLoopedBefore(state.persistence)
         val allowRecycle = corrupted || postHorror
@@ -744,7 +742,9 @@ class ChatSystem {
      *
      * Authoring: keep each line inside its speaker's chat-column budget — roughly 55-59 chars
      * worst-case, WHISKERS being the tightest at 55. Never put "commander" in a pilot's mouth;
-     * that word is TB-26/Tobar's alone.
+     * that word is TB-26/Tobar's alone. Exception: a pilot may QUOTE it interrogatively when
+     * reacting to TB-26 using it — see `onIntroSwipeHint`, where that is the opposite of using
+     * the word to address the player.
      */
     private val arrivalResponses: Map<String, Map<Int, String>> = mapOf(
         "RASCAL" to mapOf(
@@ -877,21 +877,6 @@ class ChatSystem {
             if (state.persistence.isReckoningJustWon()) {
                 state.persistence.setReckoningJustWon(false)
                 queueReckoningChatter(state, CrystalFightLines.barChatter)
-                return
-            }
-
-            // Post-reckoning LOSS — one-shot, fires once on the return after a failed attempt.
-            // Checked before the lastRun guard for the same reason as the win: a failed attempt is
-            // not a run and must never be answered with "You survived for 0:47. Best is still…".
-            // The conversation is picked by TOBAR's round count (walk-outs, persisted).
-            if (state.persistence.isReckoningJustLost()) {
-                state.persistence.setReckoningJustLost(false)
-                val (convo, poolIdx) = ReckoningRoundChatter.forRound(
-                    state.persistence.getReckoningRounds(),
-                    state.persistence.getReckoningPoolLast()
-                )
-                if (poolIdx >= 0) state.persistence.setReckoningPoolLast(poolIdx)
-                queueReckoningChatter(state, convo)
                 return
             }
 
@@ -1042,6 +1027,23 @@ class ChatSystem {
     }
 
     /**
+     * The bar reacting to a won reckoning, delivered the moment the player is in the room.
+     *
+     * The flag this drains ([PersistenceManager.isReckoningJustWon]) used to be consumed only
+     * by [onDeathReturn], which is the return from a FLIGHT — so beating the crystal and
+     * walking straight back to the bar got nothing, and the payoff for the game's most hidden
+     * ending waited behind an unrelated death. That gate made sense when the finale was a run;
+     * at the cabinet it is not a run, and there is no return for it to ride.
+     *
+     * [onDeathReturn] still drains it as well, and deliberately: a player who wins and then
+     * flies without ever crossing the bar page must not lose the one-shot. Whichever gets
+     * there first clears the flag, so it can never play twice.
+     */
+    fun onReckoningWon(state: HangarState) {
+        queueReckoningChatter(state, CrystalFightLines.barChatter)
+    }
+
+    /**
      * Build and queue a reckoning one-shot: TOBAR in bar blue, crew in their pilot color.
      * Both the win and loss returns are the same shape — only the script differs.
      */
@@ -1092,25 +1094,48 @@ class ChatSystem {
     /** Builds the ceremony lines into [into] (delivered line-by-line by the caller's queue). */
     private fun addBandanaCeremony(state: HangarState, into: MutableList<ChatMessage>) {
         val pilotId = state.persistence.getPendingBandanaPilot() ?: return
-        val bandanaCount = state.persistence.getBandanaCount()
-        if (bandanaCount >= 12) {
-            for (line in LoopDefinitions.tobarTwelfthBandanaBeat) {
-                into.add(ChatMessage("TOBAR", line, 0xFF88AACC.toInt()))
-            }
-        } else {
-            into.add(ChatMessage("TOBAR", LoopDefinitions.tobarBandanaFraming.random(), 0xFF88AACC.toInt()))
-        }
+        into.add(ChatMessage("TOBAR", LoopDefinitions.tobarBandanaFraming.random(), 0xFF88AACC.toInt()))
         val pilot = PilotDefinitions.getPilot(pilotId)
         val reply = LoopDefinitions.bandanaAwardReplies[pilotId]
         if (pilot != null && reply != null) {
             into.add(ChatMessage(pilot.callsign, reply, pilot.color))
         }
-        // Scripted desert-town build-up: exactly one guaranteed Tobar hint per ceremony,
-        // line N after the N-th bandana. (The rare ambient tier hints are separate.)
-        LoopDefinitions.desertHintForBandana(bandanaCount)?.let { hint ->
-            into.add(ChatMessage("TOBAR", hint, 0xFF88AACC.toInt()))
-        }
         state.persistence.clearPendingBandanaPilot()
+    }
+
+    /**
+     * The first-launch nudge toward the launchpad, if the player has not moved.
+     *
+     * A new player is dropped on the bar page with the intro cinematic running, and at that
+     * moment nothing on screen says the hangar has other rooms: `HangarRenderer` hides the
+     * whole HUD-chrome branch (the `[CREW] [LAUNCH] [SHOP]` nav is inside it), that nav's tap
+     * targets are separately gated on `!introCinematic`, and rooms tile at exactly
+     * `screenWidth` below sw600dp so no part of the next one bleeds in. Real players stopped
+     * here and never found the swipe.
+     *
+     * **The break is the LISTENER, not the gesture — decision, owner 2026-08-31.** TB-26
+     * gives directions any pilot in the room could follow; what Medic cannot parse is who he
+     * is giving them to. The alternative was to have him name the gesture itself, which would
+     * have taught the swipe outright; it was turned down for this, so the beat says *where*
+     * and deliberately never says *how*. If players still stall on the bar, the next thing
+     * to reach for is putting the page navigation on the intro's bar page; that was weighed
+     * and turned down as too heavy for a first-launch beat.
+     *
+     * Medic is not merely the natural witness — at first launch she is the only pilot in the
+     * room, so she is the only one who CAN react — and somebody always must. TB-26 is the
+     * only character who may address the player directly, and the crew have to notice.
+     *
+     * Fired once, by the host, and never re-armed. See `HangarSurfaceView.updateBrowsing`.
+     */
+    fun onIntroSwipeHint(state: HangarState) {
+        val tbName = if (StoryStateManager.isAstroLoop(state.persistence)) "TOBAR" else "TB-26"
+        val tbColor = 0xFF88AACC.toInt()
+        val medic = PilotDefinitions.pilots.find { it.id == "pilot_medic" } ?: return
+        queueDeathReturnLines(state, listOf(
+            ChatMessage(tbName, "Launchpad's next door, commander. When you're ready.", tbColor),
+            ChatMessage(medic.callsign, "Commander? TB, there's nobody there.", medic.color),
+            ChatMessage(tbName, "There is. Next door, when you're ready.", tbColor)
+        ))
     }
 
     fun onFirstLaunch(state: HangarState) {

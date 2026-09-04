@@ -3,6 +3,9 @@ package com.astroloop.game.hangar
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.RectF
+import com.astroloop.game.cabinet.CabinetMarqueeDrift
+import com.astroloop.game.cabinet.CabinetRenderer
+import com.astroloop.game.cabinet.CabinetSim
 import com.astroloop.game.core.GameConfig
 import com.astroloop.game.core.LayoutRect
 import com.astroloop.game.core.ScreenLayout
@@ -190,7 +193,17 @@ class HangarRenderer(private val persistence: PersistenceManager) {
     // Main render
     // =======================================================================
 
-    fun render(canvas: Canvas, state: HangarState) {
+    /**
+     * [bezelSim]/[bezelRenderer] are the store page's attract demo, owned and ticked by
+     * HangarSurfaceView — see its bezelSim doc comment. [marqueeDrift] is the marquee
+     * plate's ambient rock drift, owned the same way. Threaded through render() and
+     * drawPageContent() down to StorePageRenderer.draw() rather than stored as fields
+     * here, matching how [state] itself already crosses this same boundary.
+     */
+    fun render(
+        canvas: Canvas, state: HangarState, bezelSim: CabinetSim? = null,
+        bezelRenderer: CabinetRenderer? = null, marqueeDrift: CabinetMarqueeDrift? = null
+    ) {
         // Background
         canvas.drawColor(0xFF000011.toInt())
 
@@ -199,7 +212,7 @@ class HangarRenderer(private val persistence: PersistenceManager) {
                 drawStars(canvas)
 
                 // Draw current page content with scroll offset for peeking
-                drawPageContent(canvas, state)
+                drawPageContent(canvas, state, bezelSim, bezelRenderer, marqueeDrift)
 
                 // Walkway and pilot walker (drawn over page content)
                 drawWalkway(canvas, state)
@@ -317,7 +330,10 @@ class HangarRenderer(private val persistence: PersistenceManager) {
     // Page content dispatcher
     // =======================================================================
 
-    private fun drawPageContent(canvas: Canvas, state: HangarState) {
+    private fun drawPageContent(
+        canvas: Canvas, state: HangarState, bezelSim: CabinetSim?, bezelRenderer: CabinetRenderer?,
+        marqueeDrift: CabinetMarqueeDrift? = null
+    ) {
         // Rooms tile edge to edge one roomWidth apart. Below sw600dp roomWidth == screenWidth,
         // so this is arithmetically identical to the single-page-per-screen layout.
         val stride = HangarMetrics.effectiveRoomWidth(roomWidth, screenWidth)
@@ -337,7 +353,7 @@ class HangarRenderer(private val persistence: PersistenceManager) {
 
         val storeX = 2f * stride - viewportX
         if (storeX > -stride && storeX < screenWidth) {
-            storePageRenderer.draw(canvas, state, -storeX)
+            storePageRenderer.draw(canvas, state, -storeX, bezelSim, bezelRenderer, marqueeDrift)
         }
     }
 
@@ -1008,6 +1024,15 @@ class HangarRenderer(private val persistence: PersistenceManager) {
         val isCorruptedLaunch = StoryStateManager.isCorrupted(persistence)
         val launchColor = if (isCorruptedLaunch) Boss.CORRUPTION_COLOR else selectedShip?.color ?: 0xFF00AAFF.toInt()
         val launchAccent = if (isCorruptedLaunch) Boss.CORRUPTION_COLOR else selectedShip?.color ?: 0xFF00AAFF.toInt()
+        // The pilot's own colour follows the same rule as the walker (drawPilotWalker) and the bar
+        // crew (drawNPCWalkers): corruption darkens it to 50%, it does not go boss-red. The hull
+        // does go boss-red, via launchColor above — pilot and ship corrupt differently, and this is
+        // the one place the player sees both at once. Without it the figure that has been walking
+        // the hangar in corrupted colour snaps back to full brightness the instant it jumps for the
+        // cockpit, and the cockpit dot stays wrong for the rest of the launch.
+        val launchPilotColor = selectedPilot?.color?.let {
+            if (isCorruptedLaunch) StoryStateManager.corruptColor(it) else it
+        } ?: 0xFFFFFFFF.toInt()
 
         when {
             // Phase 1: Pilot boards (0.0 - 0.20, ~0.8s)
@@ -1036,12 +1061,12 @@ class HangarRenderer(private val persistence: PersistenceManager) {
                     val startY = walkwayY - 8f
                     val endY = shipY
                     val limbPaint = Paint().apply {
-                        color = selectedPilot.color
+                        color = launchPilotColor
                         style = Paint.Style.STROKE
                         strokeWidth = 2f
                     }
                     val pilotPaint = Paint().apply {
-                        color = selectedPilot.color
+                        color = launchPilotColor
                         style = Paint.Style.FILL
                     }
 
@@ -1086,7 +1111,7 @@ class HangarRenderer(private val persistence: PersistenceManager) {
                         rotation = (-Math.PI / 2).toFloat(),
                         size = GameConfig.SHIP_BASE_SIZE,
                         shipColor = launchColor,
-                        pilotColor = selectedPilot?.color ?: 0xFFFFFFFF.toInt(),
+                        pilotColor = launchPilotColor,
                         startingWeaponId = selectedShip.startingWeaponId,
                         alpha = 1f
                     )
@@ -1148,7 +1173,7 @@ class HangarRenderer(private val persistence: PersistenceManager) {
                         rotation = (-Math.PI / 2).toFloat(),
                         size = GameConfig.SHIP_BASE_SIZE,
                         shipColor = launchColor,
-                        pilotColor = selectedPilot?.color ?: 0xFFFFFFFF.toInt(),
+                        pilotColor = launchPilotColor,
                         startingWeaponId = selectedShip.startingWeaponId,
                         alpha = 1f
                     )
@@ -1248,7 +1273,7 @@ class HangarRenderer(private val persistence: PersistenceManager) {
                         rotation = (-Math.PI / 2).toFloat(),
                         size = GameConfig.SHIP_BASE_SIZE,
                         shipColor = launchColor,
-                        pilotColor = selectedPilot?.color ?: 0xFFFFFFFF.toInt(),
+                        pilotColor = launchPilotColor,
                         startingWeaponId = selectedShip.startingWeaponId,
                         alpha = 1f
                     )

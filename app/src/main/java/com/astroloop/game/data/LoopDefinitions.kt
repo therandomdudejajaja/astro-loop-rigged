@@ -157,12 +157,6 @@ object LoopDefinitions {
         "Not many reach where you've been. Wear it."
     )
 
-    // Replaces the framing when the 12th lands — the hook into the convergence.
-    val tobarTwelfthBandanaBeat = listOf(
-        "That's the last one. All twelve of you, marked.",
-        "Commander... whatever's out there - it's here now."
-    )
-
     val bandanaAwardReplies: Map<String, String> = mapOf(
         "pilot_medic" to "I'll wear it for all of us.",
         "pilot_rascal" to "A trophy? Now we're talking.",
@@ -177,73 +171,6 @@ object LoopDefinitions {
         "pilot_unit7" to "Insignia logged. Worn with honor.",
         "pilot_astro" to "...past the edge. Yeah. I felt it."
     )
-
-    // --- Desert-town foreshadowing (finale chunk 1) ---
-    // Secondhand: crew reactions to TV/radio about an UNNAMED desert town going
-    // wrong. No crystal, no sand (they're in a space hangar). Tobar lines weigh
-    // heavier (he half-remembers). The signal degrades as the count climbs.
-
-    // Scripted 12-line build-up, one guaranteed Tobar line per bandana ceremony (index =
-    // bandana count − 1). Arc: dismissible news item → the story repeats itself → time runs
-    // wrong out there → the feed collapses → it's waiting for Astro. All ≤58 chars (TOBAR budget).
-    val desertTownHints = listOf(
-        "Odd bit on the news. Some desert town. Slow day, I guess.",  // 1
-        "That town again. Twice on the news this week.",              // 2
-        "Radio's been crackly all week. Strange signals.",            // 3
-        "They interviewed a local out there. He just stared.",        // 4
-        "People are leaving that town. Nobody says why.",             // 5
-        "Broadcast cut out mid-sentence tonight. Same town.",         // 6
-        "Same broadcast as last night. Word for word. I counted.",    // 7
-        "Anchor said 'as we reported tomorrow.' Nobody blinked.",     // 8
-        "Clocks run wrong out there. All the same wrong.",            // 9
-        "The feed loops now. Same three seconds, over and over.",     // 10
-        "Lost the feed from that town. Completely.",                  // 11
-        "...You feel that? It's waiting for you, Astro."              // 12
-    )
-
-    /** The guaranteed ceremony hint for the [count]-th bandana (1-12), null out of range. */
-    fun desertHintForBandana(count: Int): String? = desertTownHints.getOrNull(count - 1)
-
-    data class ForeshadowingTier(val tobarLines: List<String>, val pilotLines: List<String>)
-
-    private val foreshadowTier1 = ForeshadowingTier(   // 6–8: dismissible
-        tobarLines = listOf(
-            "News had a thing about some desert town. Odd.",
-            "Radio's been crackly all week. Strange signals."
-        ),
-        pilotLines = listOf(
-            "You catch that broadcast? Folks out there are off.",
-            "TV says some desert town's acting strange."
-        )
-    )
-    private val foreshadowTier2 = ForeshadowingTier(   // 9–10: unsettling
-        tobarLines = listOf(
-            "That town's all anyone's reporting now.",
-            "Caught the news. Nobody out there acts right."
-        ),
-        pilotLines = listOf(
-            "They're saying the air's wrong out there.",
-            "Broadcast cut out mid-sentence. From that town."
-        )
-    )
-    private val foreshadowTier3 = ForeshadowingTier(   // 11: comms failing
-        tobarLines = listOf(
-            "Lost the feed from that town. Completely.",
-            "No word from out there anymore. None."
-        ),
-        pilotLines = listOf(
-            "They've stopped answering. All of them.",
-            "Whatever's out there... it's not staying there."
-        )
-    )
-
-    /** Tiered dread by bandana count. Null below 6 (foreshadowing not yet active). */
-    fun desertForeshadowing(count: Int): ForeshadowingTier? = when {
-        count < 6 -> null
-        count <= 8 -> foreshadowTier1
-        count <= 10 -> foreshadowTier2
-        else -> foreshadowTier3
-    }
 
     fun corruptionBarVibes(loop: Int): Map<String, List<String>> = when (loop) {
         1 -> mapOf(  // Witness — no meta-awareness, pilots confused and scared

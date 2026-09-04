@@ -6,6 +6,7 @@ import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
+import androidx.activity.OnBackPressedCallback
 import com.astroloop.game.core.BrickScreenView
 import com.astroloop.game.core.GameSurfaceView
 import com.astroloop.game.core.SoundManager
@@ -22,6 +23,19 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // The cabinet overlay swallows back so it can route to its pause screen instead of
+        // leaving the run. Everywhere else — including a cabinet-less hangar and mid-game —
+        // fall straight through to the default (finish the Activity), same as before this
+        // callback existed.
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (hangarView?.onBackPressedFromActivity() == true) return
+                isEnabled = false
+                onBackPressedDispatcher.onBackPressed()
+                isEnabled = true
+            }
+        })
 
         // Keep screen on
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -99,9 +113,10 @@ class MainActivity : ComponentActivity() {
             // describe exactly that: one froze on the way back, one crashed on the death
             // cutscene, and both lost the money.
             //
-            // Banking the amount passed rather than state.goldCollected is deliberate: five of
-            // the eight onGameOver call sites pass 0 on purpose — the reckoning win, the
-            // timeline shift and the debug exits grant nothing however much was collected.
+            // Banking the amount passed rather than state.goldCollected is deliberate: several
+            // onGameOver call sites pass 0 on purpose — the timeline shift and the debug exits
+            // grant nothing however much was collected. (The reckoning win used to be on that
+            // list; stage 3 moved the ending into the cabinet, which never routes through here.)
             if (yenEarned > 0) PersistenceManager(this).addYen(yenEarned)
             runOnUiThread {
                 returnToHangar(yenEarned, fadeFromWhite)

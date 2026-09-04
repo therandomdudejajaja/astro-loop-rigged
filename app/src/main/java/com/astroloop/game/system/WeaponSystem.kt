@@ -162,15 +162,19 @@ class WeaponSystem(
     private fun evolveWeapon(baseWeaponId: String, evolvedWeaponId: String, state: GameState) {
         // Remove base weapon
         removeWeapon(baseWeaponId)
-        state.weaponLevels.remove(baseWeaponId)
 
         // Add evolved weapon
         val evolvedWeapon = WeaponFactory.createWeapon(evolvedWeaponId)
         if (evolvedWeapon != null) {
             evolvedWeapon.level = GameConfig.WEAPON_MAX_LEVEL // Start at max level
             activeWeapons[evolvedWeaponId] = evolvedWeapon
-            state.weaponLevels[evolvedWeaponId] = evolvedWeapon.level
+            // In place, not appended — see GameState.replaceWeapon. The HUD grid draws
+            // weaponLevels in insertion order, so appending moved the weapon to the end of the
+            // row at the exact moment it evolved.
+            state.replaceWeapon(baseWeaponId, evolvedWeaponId, evolvedWeapon.level)
             state.addEvolution(evolvedWeaponId)
+        } else {
+            state.weaponLevels.remove(baseWeaponId)
         }
     }
 

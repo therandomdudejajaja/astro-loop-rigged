@@ -60,6 +60,31 @@ class BarPageRenderer(
         strokeWidth = 2f
     }
 
+    /**
+     * Put a card's frame back on top of a face that painted over it.
+     *
+     * The border is stroked once, before either face, and a stroke straddles its own path —
+     * so the back face's fill, which covers the whole card rect, buried the inner half of it
+     * and a turned-over card read with a visibly thinner frame than every card beside it.
+     *
+     * The store never had this: its faces draw their own border after their own background
+     * (`StorePageRenderer.drawUpgradeBack`). The bar page draws one border up front for both
+     * faces, so the back is the one that has to restore it.
+     *
+     * Only the back face calls this, and only unlocked pilots have one, so it carries that
+     * branch's weight and colour rather than re-deriving the locked variants. Drawn at the
+     * card's own [cardAlpha] and not scaled by the flip: the frame is the one part of the
+     * card that does not turn over, and animating it would be a second bug in place of the
+     * first.
+     */
+    private fun restrokeCardBorder(canvas: Canvas, rect: RectF, borderColor: Int, cardAlpha: Int) {
+        cardBorderPaint.color = borderColor
+        cardBorderPaint.alpha = cardAlpha
+        cardBorderPaint.strokeWidth = 1.5f
+        canvas.drawRoundRect(rect, 4f, 4f, cardBorderPaint)
+        cardBorderPaint.alpha = 255
+    }
+
     private val swagWirePaint = Paint().apply { color = 0xFF443322.toInt(); style = Paint.Style.STROKE; strokeWidth = 1f; isAntiAlias = true }
     private val swagBulbPaint = Paint().apply { style = Paint.Style.FILL; isAntiAlias = true }
     private val swagPath = Path()
@@ -237,6 +262,7 @@ class BarPageRenderer(
                             cardBgPaint.alpha = (cardAlpha * flipProgress).toInt()
                             canvas.drawRoundRect(rect, 4f, 4f, cardBgPaint)
                             cardBgPaint.color = 0xFF1A1A2E.toInt()
+                            restrokeCardBorder(canvas, rect, borderColor, cardAlpha)
 
                             val tb26Icon = IconCache.getPassiveIcon("tb26")
                             if (tb26Icon != null) {
@@ -264,6 +290,7 @@ class BarPageRenderer(
                             cardBgPaint.alpha = (cardAlpha * flipProgress).toInt()
                             canvas.drawRoundRect(rect, 4f, 4f, cardBgPaint)
                             cardBgPaint.color = 0xFF1A1A2E.toInt()
+                            restrokeCardBorder(canvas, rect, borderColor, cardAlpha)
 
                             val effectivePassiveId = PassiveDefinitions.getEffectivePassiveId(pilot.startingPassiveId, pilot.id, astroLoop)
                             val passiveDef = PassiveDefinitions.getPassiveDef(effectivePassiveId)

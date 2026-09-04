@@ -61,9 +61,7 @@ class CombatDroneSystem(
     }
 
     private fun syncDroneCount() {
-        // Bare-ship reckoning (and its death retreat): passives are benched — never spawn
-        // wingmen while locked out. Existing drones are left alone (no instant disappearance).
-        val target = if (state.passivesDisabled) drones.size else state.droneCount
+        val target = state.droneCount
 
         while (drones.size < target) {
             val index = drones.size

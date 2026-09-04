@@ -5,11 +5,25 @@ import com.astroloop.game.system.CrystalPhase
 object CrystalFightLines {
     // All radio lines <=35 chars — the HUD radio budget for Exo 2 at 24px.
 
-    // Opening monologue (ASTRO): pairs shown at ~3s/10s/17s, part 2 follows +3.5s.
+    /**
+     * The crystal's first words, over the authored opening — decisions 81 and 82.
+     *
+     * **Rewritten for the cabinet.** This used to be ASTRO's monologue, shown at 3s/10s/17s
+     * of a fight that no longer exists, and it survived stage 3 only as dead code. Decision
+     * 81 gives the voice to the CRYSTAL, which changes who is speaking and therefore every
+     * line.
+     *
+     * The premise it is authored against, and every word answers to it: **it was never
+     * picked up in the desert. It was left. It festered. It has come back.**
+     *
+     * It accuses whoever is flying. That is not a continuity slip — the reckoning is
+     * reachable by any of the twelve, and the crystal has been alone long enough that it no
+     * longer distinguishes. Everyone who comes is the one who left it.
+     */
     val opening = listOf(
-        "I left it out here." to "Told myself that was the end.",
-        "But it never opened." to "All those loops, still in there.",
-        "And now it's starting to leak." to "Time to close it."
+        "You left me in the sand.",
+        "Nobody came back for me.",
+        "So I came here."
     )
 
     /**
@@ -19,8 +33,10 @@ object CrystalFightLines {
      * is exactly what kills you. It never mocks the running; grief doesn't chase you screaming,
      * it whispers rest, stay, come back. The trap is never stated out loud: the player feels it.
      *
-     * ASTRO SPEAKS ZERO LINES ACROSS ALL 90 SECONDS. Answering is engaging, and engaging is
-     * stopping. His silence is the refusal — and it makes his first word in the ghost phase land.
+     * THE PILOT SPEAKS ZERO LINES. Answering is engaging, and engaging is stopping; the
+     * silence is the refusal. (This used to say ASTRO, and pointed at a first word "in the
+     * ghost phase" — a phase stage 3 deleted. The property survives the fight it was written
+     * for: whoever is flying, they do not answer.)
      */
     fun taunt(p: CrystalPhase): Pair<String, String?> = when (p) {
         CrystalPhase.P1 -> "You came back." to "They always come back."           // recognition
@@ -30,48 +46,64 @@ object CrystalFightLines {
         CrystalPhase.P5 -> "STAY - STAY..." to null                                // desperation
     }
 
-    /** Astro's "Go." — the line whose firing releases the ghosts. */
-    const val GHOST_RELEASE_LINE = "…You never had to. Go."
-
     /**
-     * Ghost climax script: (speaker, line, seconds from lance start).
+     * What the crystal says when you try to stop — decision 90.
      *
-     * The crystal's central lie is "they never lived". This beat is its REFUTATION: it says they
-     * never lived, then they speak, then they leave. Astro's silence breaks ONLY for his crew —
-     * the crystal never gets a word from him at any point in the fight.
+     * The pause belongs to the machine, and the machine is not the machine's any more. It
+     * takes the menu, says one of these, and hands the fight back.
      *
-     * LOAD-BEARING ORDERING — do not reorder or re-time:
-     *  - "…That's my crew." is Astro's first word in 90 seconds, and it is addressed to the crew.
-     *  - GHOST_RELEASE_LINE is elliptical (had to WHAT?) and completes ONLY against the crystal's
-     *    "STAY" on the line immediately before it: *you never had to stay*.
-     *  - The crew ASK to be released ("Let go, boss.") before Astro grants it.
-     *
-     * Every pronoun resolves against the line directly before it: the radio HUD shows ONE line at
-     * a time with no scrollback, so a pronoun needing earlier context is unreadable.
+     * The register is NOT the lure's. Everywhere else the crystal invites you to stop,
+     * because stopping is what kills you; here you have already stopped, and it wants you
+     * back in the air. That inversion is the mask slipping, so these are the only lines it
+     * speaks that are not an offer.
      */
-    val ghostScript: List<Triple<String, String, Float>> = listOf(
-        Triple("CRYSTAL",  "They're mine. They never lived.", 0f),
-        Triple("ASTRO",    "…That's my crew.",                2.5f),
-        Triple("MEDIC",    "We lived, Astro.",                5f),
-        Triple("DASH",     "Every loop. All of it.",          7.5f),
-        Triple("CRYSTAL",  "I held every one of them.",       10f),
-        Triple("BRUTUS",   "Held. Never had.",                12.5f),
-        Triple("WHISKERS", "Let go, boss. We're ready.",      15f),
-        Triple("CRYSTAL",  "STAY - begin - STAY...",           17.5f),
-        Triple("ASTRO",    GHOST_RELEASE_LINE,                20f)
+    val pauseDenial = listOf(
+        "Not yet.",
+        "You don't get to stop.",
+        "Stay where I can see you."
     )
 
     // <=~58 chars each (bar chatter column budget)
 
     /**
-     * Bar chatter on the WIN. Medic said "We lived, Astro." thirty seconds ago and has no idea —
-     * the climax's warmth curdles on the walk home. That gap is the whole story.
+     * The crystal's last word — decision 95. Shown in the gel strip through the win hold.
+     *
+     * It answers *"STAY - STAY..."*, which is SHATTER's lure and therefore the last thing
+     * the player hears before killing it. The whole fight is the crystal asking someone not
+     * to leave; this is what it says when they end it instead.
+     *
+     * **Gratitude, because the ending is a RELEASE and not a kill.** The flag has always
+     * been called `crystal_released`. Nothing this thing says is ever a threat — it pleads,
+     * it bargains, it offers to give back what was lost. It was left in the desert and it
+     * festered, and killing it lets it go.
+     *
+     * There is no equivalent on a LOSS. A crystal that outlives you has nothing to thank
+     * you for.
+     */
+    const val farewell = "...Thank you."
+
+    /**
+     * Bar chatter on the WIN — decision 96, and rewritten from the ground rather than
+     * trimmed.
+     *
+     * **The pilot is not in it.** They say nothing about the fight, anywhere, which is the
+     * same refusal they hold through all five patterns — and it fixes a real defect by
+     * deletion: this list hardcodes its speakers, while decision 59 makes the reckoning
+     * reachable for any of the twelve, so a win on WHISKERS used to show ASTRO reporting
+     * what happened out there.
+     *
+     * That is also why the old lines could not survive. Both of MEDIC's were REPLIES -
+     * "Reach us?" answered the pilot's "It won't reach us now", and "Out where?" answered
+     * "You'd have liked it out there, Medic". Remove the pilot and they are left answering
+     * questions nobody asked.
+     *
+     * The gap is still the whole story: the room got better and nobody in it can be told
+     * why. "Not waiting any more" is release rather than a kill, and it quietly answers the
+     * crystal's own opening - "Nobody came back for me." Someone finally did.
      */
     val barChatter = listOf(
-        "TOBAR" to "You're back. Something out there's gone quiet.",
-        "ASTRO" to "Handled. It won't reach us now.",
-        "MEDIC" to "Reach us? …Huh. Feels lighter in here. Good.",
-        "ASTRO" to "…Yeah. You'd have liked it out there, Medic.",
-        "MEDIC" to "Out where?"
+        "TOBAR" to "Something out there's gone quiet.",
+        "MEDIC" to "What was?",
+        "TOBAR" to "...I don't know. But it's not waiting any more."
     )
 }

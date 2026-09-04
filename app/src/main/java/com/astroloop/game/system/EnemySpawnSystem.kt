@@ -123,7 +123,13 @@ class EnemySpawnSystem(
 
         // Get available (non-maxed) upgrades
         val availableWeapons = WeaponDefinitions.getBaseWeapons()
-            .filter { it.id in unlockedWeaponIds && state.getWeaponLevel(it.id) < GameConfig.WEAPON_MAX_LEVEL }
+            // hasEvolutionOf: an enemy must not carry a weapon the player has evolved past, or
+            // killing it drops a pickup that cannot be redeemed. Same gate UpgradeSystem applies.
+            .filter {
+                it.id in unlockedWeaponIds &&
+                    !state.hasEvolutionOf(it.id) &&
+                    state.getWeaponLevel(it.id) < GameConfig.WEAPON_MAX_LEVEL
+            }
             .map { it.id }
             .toMutableList()
 

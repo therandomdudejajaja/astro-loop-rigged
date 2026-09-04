@@ -664,7 +664,7 @@ class HUDRenderer {
             IconCache.getPortraitBoss()
         } else {
             IconCache.getPortraitByCallsign(state.radioSpeaker, state.radioIsCorrupted,
-                state.radioBandanaPilotId(), state.radioIsGhost)
+                state.radioBandanaPilotId())
         }
     }
 

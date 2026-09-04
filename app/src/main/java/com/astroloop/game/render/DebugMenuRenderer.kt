@@ -4,16 +4,14 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.RectF
 import android.view.MotionEvent
+import com.astroloop.game.core.DebugActionDispatch
 import com.astroloop.game.core.GameConfig
 import com.astroloop.game.core.GameState
-import com.astroloop.game.data.TelemetryManager
 import com.astroloop.game.data.WeaponDefinitions
 import com.astroloop.game.data.PassiveDefinitions
 import com.astroloop.game.data.DesertDefinitions
-import com.astroloop.game.core.SoundManager
 
 class DebugMenuRenderer {
-    private val SOUND_SETS = listOf("normal", "corruption", "astroloop")
     private val bgPaint = Paint().apply {
         color = 0xCC000000.toInt()
         style = Paint.Style.FILL
@@ -94,8 +92,8 @@ class DebugMenuRenderer {
     private val flakCellRects = Array(3) { RectF() }
     private val flakActiveDesigns = intArrayOf(35, 36, 38)
 
-    // Page 6: Black Market Designs
-    private val BLACK_MARKET_PAGE = 6
+    // Page 5: Black Market Designs
+    private val BLACK_MARKET_PAGE = 5
     private var blackMarketScrollY = 0f
     private var blackMarketLastY = 0f
     private var debugStars: List<FloatArray>? = null   // [x, y, r] per star
@@ -127,54 +125,47 @@ class DebugMenuRenderer {
     private var unbrickRect = RectF()
     private var grantBandRect = RectF()
     private var clrBandRect = RectF()
-    // Crystal opening / fight / release debug buttons
-    private var crystalOpeningRect = RectF()
-    private var crystalFightRect = RectF()
-    private var crystalReleaseRect = RectF()
     // Desert debug buttons
     private var playDesertRect = RectF()
     private var playDesertP2Rect = RectF()
     private var desertCrystalRect = RectF()
     private var astroLoopRect = RectF()
-    private var reckoningRoundsRect = RectF()
     private var setDesertFlagsRect = RectF()
     private var clrDesertRect = RectF()
     private var loopRect1 = RectF()
     private var loopRect2 = RectF()
     private var loopRect3 = RectF()
 
-    // Page 4: Weapon Tuning
-    val tuningWeapons = listOf(
-        "storm_cannon", "warp_saw", "leech_burst", "autonomous_ace",
-        "frost_ring", "oblivion_beam", "jackpot_mines", "phoenix_flare",
-        "lingering_nova", "siphon_needles", "hunter_killer", "flak_barrage"
-    )
-    private val TUNING_BTN_COUNT = 11
-    private val tuningVolRects = Array(12) { Array(TUNING_BTN_COUNT) { RectF() } }
-    private val tuningBeatRects = Array(12) { Array(TUNING_BTN_COUNT) { RectF() } }
-    private val tuningSetRects = Array(SOUND_SETS.size) { RectF() }
-    private var tuningPlayStopRect = RectF()
-    private var tuningGridTop = 0f
-    private var tuningGridBottom = 0f
-    private var tuningScrollY = 0f
-    private var tuningScrollVelocity = 0f
-    var tuningPreviewSet: String = "normal"
-    var tuningBGMPlaying = false
-    val tuningVolSelections = mutableMapOf<String, Int>()   // weaponId → vol button (0-10, default 5)
-    val tuningBeatSelections = mutableMapOf<String, Int>()   // weaponId → beat button (0-10, default 5)
-
-    // Page 3: Flak Designs
-    var telemetryManager: TelemetryManager? = null
-    private var clearLogRect = RectF()
-    private var telemetryScrollOffset = 0f
-    private var telemetryScrollVelocity = 0f
-    private var expandedRunIndex = -1
-    private var telemetryLastY = 0f
-    private var telemetryDragging = false
+    // Page 6: Arcade (BELT RUN cabinet debug)
+    private var arcadeOpenRect = RectF()
+    private var arcadePlayRect = RectF()
+    private var arcadeCreditsRect = RectF()
+    private var arcadeClearPilotRect = RectF()
+    private var arcadeClearAllRect = RectF()
+    private var arcadeResetRect = RectF()
+    // Index 0 is the authored opening; 1..5 are the five patterns.
+    private val arcadePhaseRects = Array(6) { RectF() }
+    // Same five patterns, landed on at lap 2 instead of lap 1 — the escalation was
+    // otherwise reachable only by surviving a full 75-second lap first. Index i is
+    // pattern i+1 (there is no lap-2 "OPEN").
+    private val arcadeLap2PhaseRects = Array(5) { RectF() }
 
     private var closeButtonRect = RectF()
 
     var renderScale: Float = 1f
+
+    /**
+     * False when the menu is hosted by the hangar, where there is no live run.
+     *
+     * Pages 0 and 1 are the only ones that read run state — `renderWeaponsPassivesPage`,
+     * `renderEvolutionsResetsPage` and `handleWeaponsPassivesTouch`. Everything else reads the
+     * `debug*` persistence mirrors, which the hangar populates itself.
+     *
+     * Those two pages draw dimmed and inert rather than being hidden. Labelled, not hidden: it is
+     * the same treatment UNBRICK already uses for "Not bricked" at :459, and the one stage 1
+     * Task 15 reused for the dimmed ARCADE buttons.
+     */
+    var runContext: Boolean = true
 
     // Swipe tracking
     private var swipeStartX = 0f
@@ -194,17 +185,37 @@ class DebugMenuRenderer {
     fun render(canvas: Canvas, state: GameState) {
         canvas.drawRect(0f, 0f, screenWidth, screenHeight, bgPaint)
 
+        if (!runContext && (state.debugMenuPage == 0 || state.debugMenuPage == 1)) {
+            drawUnavailablePage(canvas)
+            drawPageDots(canvas, state.debugMenuPage)
+            drawCloseButton(canvas)
+            return
+        }
+
         when (state.debugMenuPage) {
             0 -> renderWeaponsPassivesPage(canvas, state)
             1 -> renderEvolutionsResetsPage(canvas, state)
             2 -> renderPhase4Page(canvas, state)
             3 -> renderFlakDesignsPage(canvas, state)
-            5 -> drawThrusterPage(canvas)
-            6 -> renderBlackMarketPage(canvas, state)
+            4 -> drawThrusterPage(canvas)
+            5 -> renderBlackMarketPage(canvas, state)
+            6 -> renderArcadePage(canvas, state)
         }
 
         drawPageDots(canvas, state.debugMenuPage)
         drawCloseButton(canvas)
+    }
+
+    /** The two run-only pages, shown from the hangar. Visible, named, and inert. */
+    private fun drawUnavailablePage(canvas: Canvas) {
+        var y = 60f
+        canvas.drawText("NOT AVAILABLE HERE", screenWidth / 2f, y, titlePaint)
+        y += 90f
+        canvas.drawText("Weapons, passives and evolutions", screenWidth / 2f, y, infoPaint)
+        y += 44f
+        canvas.drawText("need a live run. Launch, then use", screenWidth / 2f, y, infoPaint)
+        y += 44f
+        canvas.drawText("the button from inside the game.", screenWidth / 2f, y, infoPaint)
     }
 
     // =======================================================================
@@ -411,7 +422,13 @@ class DebugMenuRenderer {
 
         // Row 1: BOSS NOW + SET CORRUPT
         bossNowRect = RectF(leftX, y, leftX + btnWidth, y + btnHeight)
-        drawPhase4Button(canvas, bossNowRect, "BOSS NOW", "Skip to 9:59", 0xFF442244.toInt(), 0xFFAA44AA.toInt())
+        if (runContext) {
+            drawPhase4Button(canvas, bossNowRect, "BOSS NOW", "Skip to 9:59",
+                0xFF442244.toInt(), 0xFFAA44AA.toInt())
+        } else {
+            drawPhase4Button(canvas, bossNowRect, "BOSS NOW", "Needs a run",
+                0xFF1a1a1a.toInt(), 0xFF333333.toInt())
+        }
 
         setCorruptRect = RectF(rightX, y, rightX + btnWidth, y + btnHeight)
         drawPhase4Button(canvas, setCorruptRect, "SET CORRUPT", "storyPhase = 1", 0xFF442222.toInt(), 0xFFAA2222.toInt())
@@ -458,21 +475,6 @@ class DebugMenuRenderer {
 
         y += btnHeight + gap
 
-        // Row 7: CRYSTAL OPENING (full-width — entry point for the ~15s opening sequence)
-        crystalOpeningRect = RectF(leftX, y, rightX + btnWidth, y + btnHeight)
-        drawPhase4Button(canvas, crystalOpeningRect, "CRYSTAL OPENING", "Empty field + Astro lines", 0xFF1A2030.toInt(), 0xFF33D6CC.toInt())
-
-        y += btnHeight + gap
-
-        // Row 8: CRYSTAL FIGHT + CRYSTAL RELEASE (two-column)
-        crystalFightRect = RectF(leftX, y, leftX + btnWidth, y + btnHeight)
-        drawPhase4Button(canvas, crystalFightRect, "CRYSTAL FIGHT", "90s survival fight", 0xFF1A2233.toInt(), 0xFF44BBEE.toInt())
-
-        crystalReleaseRect = RectF(rightX, y, rightX + btnWidth, y + btnHeight)
-        drawPhase4Button(canvas, crystalReleaseRect, "CRYSTAL RELEASE", "Skip to ghost lance", 0xFF1A2433.toInt(), 0xFF44DDAA.toInt())
-
-        y += btnHeight + gap
-
         // --- Desert section ---
         infoPaint.color = 0xFFAA8844.toInt()
         canvas.drawText("DESERT", screenWidth / 2f, y + 10f, infoPaint)
@@ -480,28 +482,43 @@ class DebugMenuRenderer {
 
         // Row 6: DESERT + DESERT P2
         playDesertRect = RectF(leftX, y, leftX + btnWidth, y + btnHeight)
-        drawPhase4Button(canvas, playDesertRect, "DESERT", "Start phase 0", 0xFF443311.toInt(), 0xFFAA8833.toInt())
+        if (runContext) {
+            drawPhase4Button(canvas, playDesertRect, "DESERT", "Start phase 0",
+                0xFF443311.toInt(), 0xFFAA8833.toInt())
+        } else {
+            drawPhase4Button(canvas, playDesertRect, "DESERT", "Needs a run",
+                0xFF1a1a1a.toInt(), 0xFF333333.toInt())
+        }
 
         playDesertP2Rect = RectF(rightX, y, rightX + btnWidth, y + btnHeight)
-        drawPhase4Button(canvas, playDesertP2Rect, "DESERT P2", "Escalation", 0xFF443311.toInt(), 0xFFAA6622.toInt())
+        if (runContext) {
+            drawPhase4Button(canvas, playDesertP2Rect, "DESERT P2", "Escalation",
+                0xFF443311.toInt(), 0xFFAA6622.toInt())
+        } else {
+            drawPhase4Button(canvas, playDesertP2Rect, "DESERT P2", "Needs a run",
+                0xFF1a1a1a.toInt(), 0xFF333333.toInt())
+        }
 
         y += btnHeight + gap
 
         // Row 7: CRYSTAL + DST FLAGS
         desertCrystalRect = RectF(leftX, y, leftX + btnWidth, y + btnHeight)
-        drawPhase4Button(canvas, desertCrystalRect, "CRYSTAL", "Crystal phase", 0xFF224444.toInt(), 0xFF44AACC.toInt())
+        if (runContext) {
+            drawPhase4Button(canvas, desertCrystalRect, "CRYSTAL", "Crystal phase",
+                0xFF224444.toInt(), 0xFF44AACC.toInt())
+        } else {
+            drawPhase4Button(canvas, desertCrystalRect, "CRYSTAL", "Needs a run",
+                0xFF1a1a1a.toInt(), 0xFF333333.toInt())
+        }
 
         setDesertFlagsRect = RectF(rightX, y, rightX + btnWidth, y + btnHeight)
         drawPhase4Button(canvas, setDesertFlagsRect, "DST FLAGS", "Done + good ending", 0xFF443322.toInt(), 0xFFAA8844.toInt())
 
         y += btnHeight + gap
 
-        // Row 9: RECKONING ROUNDS + ASTRO LOOP
-        reckoningRoundsRect = RectF(leftX, y, leftX + btnWidth, y + btnHeight)
-        drawPhase4Button(canvas, reckoningRoundsRect, "ROUNDS: ${state.debugReckoningRounds}",
-            "Tap: +1 (wraps at 25)", 0xFF222A44.toInt(), 0xFF6688CC.toInt())
-
-        astroLoopRect = RectF(rightX, y, rightX + btnWidth, y + btnHeight)
+        // Row 9: ASTRO LOOP. Left-hand slot only — every row here fills left first, and the
+        // ROUNDS button that used to share it went with the reckoning round counter.
+        astroLoopRect = RectF(leftX, y, leftX + btnWidth, y + btnHeight)
         val astroLabel = if (state.debugAstroLoopMode) "ASTRO: ON" else "ASTRO: OFF"
         val astroSub = if (state.debugAstroLoopMode) "Tap to clear" else "Tap to set"
         val astroFill = if (state.debugAstroLoopMode) 0xFF224444.toInt() else 0xFF1a1a1a.toInt()
@@ -538,6 +555,84 @@ class DebugMenuRenderer {
         canvas.drawText(subtitle, rect.centerX(), rect.centerY() + 16f, infoPaint)
         closeTextPaint.color = 0xFFCCCCCC.toInt()
         closeTextPaint.textSize = 20f
+    }
+
+    // =======================================================================
+    // Page 6: Arcade (BELT RUN cabinet debug)
+    // =======================================================================
+
+    private fun renderArcadePage(canvas: Canvas, state: GameState) {
+        var y = 60f
+
+        canvas.drawText("ARCADE", screenWidth / 2f, y, titlePaint)
+        y += 40f
+
+        val btnWidth = screenWidth * 0.42f
+        val btnHeight = 50f
+        val gap = 8f
+        val leftX = (screenWidth - btnWidth * 2 - gap) / 2f
+        val rightX = leftX + btnWidth + gap
+
+        // Live as of stage 2. The route is CabinetDebugIntent riding onGameOver(0, false),
+        // which is how RESET_SMALL/RESET_BIG/SET_CORRUPT already reach the hangar. Stage 1
+        // drew these dimmed because no bridge existed; one does now.
+        arcadeOpenRect = RectF(leftX, y, leftX + btnWidth, y + btnHeight)
+        drawPhase4Button(canvas, arcadeOpenRect, "OPEN CABINET", "Skip the walk", 0xFF223344.toInt(), 0xFF4488CC.toInt())
+
+        arcadePlayRect = RectF(rightX, y, rightX + btnWidth, y + btnHeight)
+        drawPhase4Button(canvas, arcadePlayRect, "PLAY NOW", "Run - or the ending if cleared", 0xFF223344.toInt(), 0xFF4488CC.toInt())
+
+        y += btnHeight + gap
+
+        arcadeCreditsRect = RectF(leftX, y, leftX + btnWidth, y + btnHeight)
+        drawPhase4Button(canvas, arcadeCreditsRect, "+10 CREDITS", "Bank ten credits", 0xFF223344.toInt(), 0xFF4488CC.toInt())
+
+        arcadeClearPilotRect = RectF(rightX, y, rightX + btnWidth, y + btnHeight)
+        drawPhase4Button(canvas, arcadeClearPilotRect, "CLEAR PILOT", "Selected pilot best = 999", 0xFF224422.toInt(), 0xFF44AA44.toInt())
+
+        y += btnHeight + gap
+
+        arcadeClearAllRect = RectF(leftX, y, leftX + btnWidth, y + btnHeight)
+        drawPhase4Button(canvas, arcadeClearAllRect, "CLEAR ALL 12", "Opens the stage-3 gate", 0xFF223344.toInt(), 0xFF4488CC.toInt())
+
+        arcadeResetRect = RectF(rightX, y, rightX + btnWidth, y + btnHeight)
+        drawPhase4Button(canvas, arcadeResetRect, "RESET ARCADE", "Wipe scores + credits", 0xFF332222.toInt(), 0xFFCC6666.toInt())
+
+        y += btnHeight + gap * 2f
+
+        canvas.drawText("RECKONING", screenWidth / 2f, y, titlePaint)
+        y += 28f
+
+        // Six small buttons: 0 plays the authored opening, 1..5 drop into that phase.
+        // This is the action §9 of the design says to build before the patterns — a
+        // pattern reachable only by surviving the four before it gets tuned twice a day.
+        val phaseW = (screenWidth * 0.86f - gap * 5f) / 6f
+        val phaseX0 = screenWidth * 0.07f
+        for (i in 0 until 6) {
+            val px = phaseX0 + i * (phaseW + gap)
+            arcadePhaseRects[i] = RectF(px, y, px + phaseW, y + btnHeight)
+            drawPhase4Button(
+                canvas, arcadePhaseRects[i],
+                if (i == 0) "OPEN" else "P$i",
+                "", 0xFF332244.toInt(), 0xFFAA66CC.toInt()
+            )
+        }
+
+        y += btnHeight + gap
+
+        // The same five patterns, landed on at lap 2 instead of lap 1: the debug jump
+        // hard-reset lap to 1, which made the escalation reachable only by surviving a
+        // full 75-second lap in a fight nobody had confirmed was survivable. Aligned
+        // under P1..P5 above (there is no lap-2 "OPEN") so the grid reads as one column
+        // per pattern across both laps.
+        for (i in 1..5) {
+            val px = phaseX0 + i * (phaseW + gap)
+            arcadeLap2PhaseRects[i - 1] = RectF(px, y, px + phaseW, y + btnHeight)
+            drawPhase4Button(
+                canvas, arcadeLap2PhaseRects[i - 1],
+                "P$i'", "Lap 2", 0xFF223344.toInt(), 0xFF66AACC.toInt()
+            )
+        }
     }
 
     // =======================================================================
@@ -614,7 +709,7 @@ class DebugMenuRenderer {
     }
 
     // =======================================================================
-    // Page 5: Thruster Designs
+    // Page 4: Thruster Designs
     // =======================================================================
 
     private fun drawThrusterPage(canvas: Canvas) {
@@ -707,7 +802,7 @@ class DebugMenuRenderer {
     }
 
     // =======================================================================
-    // Page 6: Black Market Designs
+    // Page 5: Black Market Designs
     // =======================================================================
 
     private fun renderBlackMarketPage(canvas: Canvas, state: GameState) {
@@ -785,9 +880,6 @@ class DebugMenuRenderer {
                 swipeStartX = ex
                 swipeStartY = ey
                 isSwiping = false
-                telemetryDragging = false
-                telemetryLastY = ey
-                telemetryScrollVelocity = 0f
                 // Tuning scroll
                 blackMarketLastY = ey
             }
@@ -825,11 +917,17 @@ class DebugMenuRenderer {
             return "CLOSE"
         }
 
+        if (!runContext && (state.debugMenuPage == 0 || state.debugMenuPage == 1)) {
+            // Swipes between pages still work; nothing on these two pages is a target.
+            return null
+        }
+
         when (state.debugMenuPage) {
             0 -> return handleWeaponsPassivesTouch(ex, ey, state)
             1 -> return handleEvolutionsResetsTouch(ex, ey, state)
             2 -> return handlePhase4Touch(ex, ey, state)
             3 -> return handleFlakDesignsTouch(ex, ey, state)
+            6 -> return handleArcadeTouch(ex, ey, state)
         }
         return null
     }
@@ -905,6 +1003,14 @@ class DebugMenuRenderer {
     }
 
     private fun handlePhase4Touch(ex: Float, ey: Float, state: GameState): String? {
+        val action = phase4Action(ex, ey) ?: return null
+        // Same predicate the draw side used to decide whether to dim the row (Step 2), so a
+        // row and its handler cannot disagree about which seven need a live run.
+        if (!runContext && DebugActionDispatch.isRunOnly(action)) return null
+        return action
+    }
+
+    private fun phase4Action(ex: Float, ey: Float): String? {
         if (bossNowRect.contains(ex, ey)) return "BOSS_NOW"
         if (setCorruptRect.contains(ex, ey)) return "SET_CORRUPT"
         if (killPilotRect.contains(ex, ey)) return "KILL_PILOT"
@@ -914,15 +1020,11 @@ class DebugMenuRenderer {
         if (unbrickRect.contains(ex, ey)) return "UNBRICK"
         if (grantBandRect.contains(ex, ey)) return "GRANT_BANDANAS"
         if (clrBandRect.contains(ex, ey)) return "CLEAR_BANDANAS"
-        if (crystalOpeningRect.contains(ex, ey)) return "CRYSTAL_OPENING"
-        if (crystalFightRect.contains(ex, ey)) return "CRYSTAL_FIGHT"
-        if (crystalReleaseRect.contains(ex, ey)) return "CRYSTAL_RELEASE"
         // Desert buttons
         if (playDesertRect.contains(ex, ey)) return "PLAY_DESERT"
         if (playDesertP2Rect.contains(ex, ey)) return "PLAY_DESERT_P2"
         if (desertCrystalRect.contains(ex, ey)) return "DESERT_CRYSTAL"
         if (astroLoopRect.contains(ex, ey)) return "TOGGLE_ASTRO_LOOP"
-        if (reckoningRoundsRect.contains(ex, ey)) return "RECKONING_ROUNDS_INC"
         if (setDesertFlagsRect.contains(ex, ey)) return "SET_DESERT_FLAGS"
         if (clrDesertRect.contains(ex, ey)) return "CLR_DESERT"
         if (loopRect1.contains(ex, ey)) return "SET_LOOP_1"
@@ -932,375 +1034,25 @@ class DebugMenuRenderer {
     }
 
     // =======================================================================
-    // Page 3: Flak Designs
+    // Page 6: Arcade (BELT RUN cabinet debug)
     // =======================================================================
 
-    private val telemetryLinePaint = Paint().apply {
-        color = 0xFFCCCCCC.toInt()
-        textSize = 14f
-        isAntiAlias = true
-        typeface = FontManager.getRegular()
-        textAlign = Paint.Align.LEFT
-    }
-
-    private val telemetryDetailPaint = Paint().apply {
-        color = 0xFF999999.toInt()
-        textSize = 12f
-        isAntiAlias = true
-        typeface = FontManager.getRegular()
-        textAlign = Paint.Align.LEFT
-    }
-
-    private fun renderTelemetryPage(canvas: Canvas, state: GameState) {
-        val tm = telemetryManager ?: return
-        var y = 60f
-
-        val runCount = tm.getRunCount()
-        val sizeKB = String.format("%.1f", tm.getFileSizeKB())
-        canvas.drawText("TELEMETRY ($runCount runs, ${sizeKB}KB)", screenWidth / 2f, y, titlePaint)
-        y += 30f
-
-        // CLEAR LOG button
-        val clearBtnWidth = 200f
-        val clearBtnHeight = 40f
-        val clearBtnX = (screenWidth - clearBtnWidth) / 2f
-        clearLogRect = RectF(clearBtnX, y, clearBtnX + clearBtnWidth, y + clearBtnHeight)
-        btnFillPaint.color = 0xFF442222.toInt()
-        canvas.drawRoundRect(clearLogRect, 8f, 8f, btnFillPaint)
-        btnStrokePaint.color = 0xFFAA4444.toInt()
-        canvas.drawRoundRect(clearLogRect, 8f, 8f, btnStrokePaint)
-        closeTextPaint.color = 0xFFFFAAAA.toInt()
-        closeTextPaint.textSize = 16f
-        canvas.drawText("CLEAR LOG", clearLogRect.centerX(), clearLogRect.centerY() + 6f, closeTextPaint)
-        closeTextPaint.color = 0xFFCCCCCC.toInt()
-        closeTextPaint.textSize = 20f
-        y += clearBtnHeight + 16f
-
-        // Scrollable run list
-        val listTop = y
-        val listBottom = screenHeight - 120f
-        canvas.save()
-        canvas.clipRect(0f, listTop, screenWidth, listBottom)
-
-        val summaries = tm.getRunSummaries()
-        val lineHeight = 20f
-        val detailLineHeight = 16f
-        var drawY = listTop - telemetryScrollOffset
-
-        for (i in summaries.indices) {
-            // Summary line
-            if (drawY + lineHeight > listTop - 20f && drawY < listBottom + 20f) {
-                telemetryLinePaint.color = if (i == expandedRunIndex) 0xFF44CCFF.toInt() else 0xFFCCCCCC.toInt()
-                canvas.drawText(summaries[i], marginX, drawY + lineHeight, telemetryLinePaint)
-            }
-            drawY += lineHeight + 4f
-
-            // Expanded detail lines
-            if (i == expandedRunIndex) {
-                val details = tm.getRunDetail(i)
-                for (detail in details) {
-                    if (drawY + detailLineHeight > listTop - 20f && drawY < listBottom + 20f) {
-                        canvas.drawText("  $detail", marginX, drawY + detailLineHeight, telemetryDetailPaint)
-                    }
-                    drawY += detailLineHeight + 2f
-                }
-                drawY += 4f
-            }
+    private fun handleArcadeTouch(ex: Float, ey: Float, state: GameState): String? {
+        if (arcadeOpenRect.contains(ex, ey)) return "ARCADE_OPEN"
+        if (arcadePlayRect.contains(ex, ey)) return "ARCADE_PLAY"
+        for (i in 0 until 6) {
+            if (arcadePhaseRects[i].contains(ex, ey)) return "RECKONING_PHASE_$i"
         }
-
-        // Clamp scroll to content
-        val totalContentHeight = drawY + telemetryScrollOffset - listTop
-        val maxScroll = (totalContentHeight - (listBottom - listTop)).coerceAtLeast(0f)
-        telemetryScrollOffset = telemetryScrollOffset.coerceIn(0f, maxScroll)
-
-        canvas.restore()
-
-        if (summaries.isEmpty()) {
-            infoPaint.color = 0xFF666666.toInt()
-            canvas.drawText("No runs recorded yet", screenWidth / 2f, listTop + 40f, infoPaint)
+        for (i in arcadeLap2PhaseRects.indices) {
+            // i is pattern (i + 1); GameSurfaceView strips the "_LAP2" suffix and reads
+            // lap from it, so this is the same action string family, not a new one.
+            if (arcadeLap2PhaseRects[i].contains(ex, ey)) return "RECKONING_PHASE_${i + 1}_LAP2"
         }
-
-        // File path at bottom
-        infoPaint.color = 0xFF555555.toInt()
-        canvas.drawText("telemetry.json", screenWidth / 2f, screenHeight - 115f, infoPaint)
-    }
-
-    private fun handleTelemetryTouch(ex: Float, ey: Float, state: GameState): String? {
-        if (clearLogRect.contains(ex, ey)) {
-            return "CLEAR_TELEMETRY"
-        }
-
-        // Tap on run line toggles expansion
-        val tm = telemetryManager ?: return null
-        val summaries = tm.getRunSummaries()
-        val listTop = 60f + 30f + 40f + 16f  // title + clearBtn + gap
-        val lineHeight = 20f
-        val detailLineHeight = 16f
-        var drawY = listTop - telemetryScrollOffset
-
-        for (i in summaries.indices) {
-            val lineTop = drawY
-            val lineBot = drawY + lineHeight + 4f
-            drawY = lineBot
-
-            if (i == expandedRunIndex) {
-                val details = tm.getRunDetail(i)
-                drawY += details.size * (detailLineHeight + 2f) + 4f
-            }
-
-            if (ey in lineTop..lineBot && ex > marginX) {
-                expandedRunIndex = if (expandedRunIndex == i) -1 else i
-                return null
-            }
-        }
-
+        if (arcadeCreditsRect.contains(ex, ey)) return "ARCADE_CREDITS"
+        if (arcadeClearPilotRect.contains(ex, ey)) return "ARCADE_CLEAR_PILOT"
+        if (arcadeClearAllRect.contains(ex, ey)) return "ARCADE_CLEAR_ALL"
+        if (arcadeResetRect.contains(ex, ey)) return "ARCADE_RESET"
         return null
-    }
-
-    // =======================================================================
-    // Page 4: Weapon Tuning
-    // =======================================================================
-
-    private fun renderTuningPage(canvas: Canvas, state: GameState) {
-        var y = 60f
-
-        canvas.drawText("WEAPON TUNING", screenWidth / 2f, y, titlePaint)
-        y += 36f
-
-        // Set buttons row
-        val setBtnWidth = (screenWidth - marginX * 2 - (SOUND_SETS.size - 1) * buttonGap) / SOUND_SETS.size
-        val setBtnHeight = 36f
-        for (s in SOUND_SETS.indices) {
-            val bx = marginX + s * (setBtnWidth + buttonGap)
-            val rect = RectF(bx, y, bx + setBtnWidth, y + setBtnHeight)
-            tuningSetRects[s] = rect
-            val isSelected = SOUND_SETS[s] == tuningPreviewSet
-            btnFillPaint.color = if (isSelected) 0xFF006666.toInt() else 0xFF222222.toInt()
-            canvas.drawRoundRect(rect, 6f, 6f, btnFillPaint)
-            btnStrokePaint.color = if (isSelected) 0xFF00CCCC.toInt() else 0xFF666666.toInt()
-            canvas.drawRoundRect(rect, 6f, 6f, btnStrokePaint)
-            closeTextPaint.color = if (isSelected) 0xFF00FFFF.toInt() else 0xFFAAAAAA.toInt()
-            closeTextPaint.textSize = 14f
-            canvas.drawText(SOUND_SETS[s].uppercase(), rect.centerX(), rect.centerY() + 5f, closeTextPaint)
-        }
-        y += setBtnHeight + 8f
-
-        // Play/Stop button
-        val playStopWidth = screenWidth - marginX * 2
-        val playStopHeight = 36f
-        tuningPlayStopRect = RectF(marginX, y, marginX + playStopWidth, y + playStopHeight)
-        if (tuningBGMPlaying) {
-            btnFillPaint.color = 0xFF442222.toInt()
-            canvas.drawRoundRect(tuningPlayStopRect, 6f, 6f, btnFillPaint)
-            btnStrokePaint.color = 0xFFFF4444.toInt()
-            canvas.drawRoundRect(tuningPlayStopRect, 6f, 6f, btnStrokePaint)
-            closeTextPaint.color = 0xFFFF6666.toInt()
-            closeTextPaint.textSize = 16f
-            canvas.drawText("STOP", tuningPlayStopRect.centerX(), tuningPlayStopRect.centerY() + 6f, closeTextPaint)
-        } else {
-            btnFillPaint.color = 0xFF224422.toInt()
-            canvas.drawRoundRect(tuningPlayStopRect, 6f, 6f, btnFillPaint)
-            btnStrokePaint.color = 0xFF44AA44.toInt()
-            canvas.drawRoundRect(tuningPlayStopRect, 6f, 6f, btnStrokePaint)
-            closeTextPaint.color = 0xFFAAFFAA.toInt()
-            closeTextPaint.textSize = 16f
-            canvas.drawText("PLAY", tuningPlayStopRect.centerX(), tuningPlayStopRect.centerY() + 6f, closeTextPaint)
-        }
-        y += playStopHeight + 8f
-
-        // Scrollable weapon tuning grid
-        tuningGridTop = y
-        tuningGridBottom = screenHeight - 120f
-
-        canvas.save()
-        canvas.clipRect(0f, tuningGridTop, screenWidth, tuningGridBottom)
-        canvas.translate(0f, -tuningScrollY)
-
-        val labelWidth = 60f
-        val gridAvailWidth = screenWidth - marginX * 2 - labelWidth
-        val btnGap = 2f
-        val btnSize = ((gridAvailWidth - (TUNING_BTN_COUNT - 1) * btnGap) / TUNING_BTN_COUNT).coerceAtLeast(22f)
-        val rowHeight = btnSize + 4f
-        val blockHeight = rowHeight * 2 + 16f  // 2 rows + weapon name + gap
-
-        for (i in tuningWeapons.indices) {
-            val weaponId = tuningWeapons[i]
-            val blockY = tuningGridTop + i * blockHeight
-            val volSel = tuningVolSelections[weaponId] ?: 5
-            val beatSel = tuningBeatSelections[weaponId] ?: 5
-            val isAutoPlaying = SoundManager.tuningAutoPlay.containsKey(weaponId)
-
-            // Weapon name
-            btnTextPaint.color = if (isAutoPlaying) 0xFFFFFF00.toInt() else 0xFFCCCCCC.toInt()
-            btnTextPaint.textSize = 11f
-            btnTextPaint.textAlign = Paint.Align.LEFT
-            val abbrev = weaponId.replace("_", " ").split(" ").joinToString(" ") { it.take(4) }
-            canvas.drawText(abbrev, marginX, blockY + 10f, btnTextPaint)
-            btnTextPaint.textAlign = Paint.Align.CENTER
-
-            // VOL label
-            btnTextPaint.color = 0xFF888888.toInt()
-            btnTextPaint.textSize = 9f
-            btnTextPaint.textAlign = Paint.Align.LEFT
-            canvas.drawText("VOL", marginX, blockY + 14f + rowHeight * 0.65f, btnTextPaint)
-            btnTextPaint.textAlign = Paint.Align.CENTER
-
-            // Volume buttons
-            val volRowY = blockY + 14f
-            for (v in 0 until TUNING_BTN_COUNT) {
-                val bx = marginX + labelWidth + v * (btnSize + btnGap)
-                val rect = RectF(bx, volRowY, bx + btnSize, volRowY + btnSize)
-                tuningVolRects[i][v] = rect
-                val isSel = v == volSel
-                when {
-                    isSel && isAutoPlaying -> {
-                        btnFillPaint.color = 0xFF444400.toInt()
-                        btnStrokePaint.color = 0xFFFFFF00.toInt()
-                        btnNumPaint.color = 0xFFFFFF00.toInt()
-                    }
-                    isSel -> {
-                        btnFillPaint.color = 0xFF003344.toInt()
-                        btnStrokePaint.color = 0xFF00CCCC.toInt()
-                        btnNumPaint.color = 0xFF00CCCC.toInt()
-                    }
-                    v == 5 -> {
-                        btnFillPaint.color = 0xFF1a1a1a.toInt()
-                        btnStrokePaint.color = 0xFF555555.toInt()
-                        btnNumPaint.color = 0xFF888888.toInt()
-                    }
-                    else -> {
-                        btnFillPaint.color = 0xFF1a1a1a.toInt()
-                        btnStrokePaint.color = 0xFF333333.toInt()
-                        btnNumPaint.color = 0xFF555555.toInt()
-                    }
-                }
-                canvas.drawRoundRect(rect, 3f, 3f, btnFillPaint)
-                canvas.drawRoundRect(rect, 3f, 3f, btnStrokePaint)
-                btnNumPaint.textSize = 10f
-                canvas.drawText("${v + 1}", rect.centerX(), rect.centerY() + 3f, btnNumPaint)
-            }
-
-            // BEAT label
-            btnTextPaint.color = 0xFF888888.toInt()
-            btnTextPaint.textSize = 9f
-            btnTextPaint.textAlign = Paint.Align.LEFT
-            canvas.drawText("BEAT", marginX, blockY + 14f + rowHeight + rowHeight * 0.65f, btnTextPaint)
-            btnTextPaint.textAlign = Paint.Align.CENTER
-
-            // Beat offset buttons
-            val beatRowY = blockY + 14f + rowHeight
-            for (v in 0 until TUNING_BTN_COUNT) {
-                val bx = marginX + labelWidth + v * (btnSize + btnGap)
-                val rect = RectF(bx, beatRowY, bx + btnSize, beatRowY + btnSize)
-                tuningBeatRects[i][v] = rect
-                val isSel = v == beatSel
-                when {
-                    isSel && isAutoPlaying -> {
-                        btnFillPaint.color = 0xFF444400.toInt()
-                        btnStrokePaint.color = 0xFFFFFF00.toInt()
-                        btnNumPaint.color = 0xFFFFFF00.toInt()
-                    }
-                    isSel -> {
-                        btnFillPaint.color = 0xFF330033.toInt()
-                        btnStrokePaint.color = 0xFFCC44CC.toInt()
-                        btnNumPaint.color = 0xFFCC44CC.toInt()
-                    }
-                    v == 5 -> {
-                        btnFillPaint.color = 0xFF1a1a1a.toInt()
-                        btnStrokePaint.color = 0xFF555555.toInt()
-                        btnNumPaint.color = 0xFF888888.toInt()
-                    }
-                    else -> {
-                        btnFillPaint.color = 0xFF1a1a1a.toInt()
-                        btnStrokePaint.color = 0xFF333333.toInt()
-                        btnNumPaint.color = 0xFF555555.toInt()
-                    }
-                }
-                canvas.drawRoundRect(rect, 3f, 3f, btnFillPaint)
-                canvas.drawRoundRect(rect, 3f, 3f, btnStrokePaint)
-                btnNumPaint.textSize = 10f
-                canvas.drawText("${v + 1}", rect.centerX(), rect.centerY() + 3f, btnNumPaint)
-            }
-        }
-
-        canvas.restore()
-        btnNumPaint.textSize = 18f
-        btnTextPaint.textSize = 13f
-        closeTextPaint.color = 0xFFCCCCCC.toInt()
-        closeTextPaint.textSize = 20f
-    }
-
-    private fun handleTuningTouch(x: Float, y: Float): String? {
-        // Set buttons
-        for (s in SOUND_SETS.indices) {
-            if (tuningSetRects[s].contains(x, y)) {
-                tuningPreviewSet = SOUND_SETS[s]
-                return "TUNING_SET:${SOUND_SETS[s]}"
-            }
-        }
-
-        // Play/Stop
-        if (tuningPlayStopRect.contains(x, y)) {
-            return "TUNING_BGM_TOGGLE"
-        }
-
-        // Weapon grid (adjusted for scroll)
-        if (y >= tuningGridTop && y <= tuningGridBottom) {
-            val adjustedY = y + tuningScrollY
-            val labelWidth = 60f
-            val gridAvailWidth = screenWidth - marginX * 2 - labelWidth
-            val btnGap = 2f
-            val btnSize = ((gridAvailWidth - (TUNING_BTN_COUNT - 1) * btnGap) / TUNING_BTN_COUNT).coerceAtLeast(22f)
-            val rowHeight = btnSize + 4f
-            val blockHeight = rowHeight * 2 + 16f
-
-            for (i in tuningWeapons.indices) {
-                val blockY = tuningGridTop + i * blockHeight
-                val volRowY = blockY + 14f
-                val beatRowY = blockY + 14f + rowHeight
-
-                // Volume buttons
-                if (adjustedY >= volRowY && adjustedY <= volRowY + btnSize) {
-                    for (v in 0 until TUNING_BTN_COUNT) {
-                        val bx = marginX + labelWidth + v * (btnSize + btnGap)
-                        if (x >= bx && x <= bx + btnSize) {
-                            tuningVolSelections[tuningWeapons[i]] = v
-                            return "TUNING_VOL:$i:$v"
-                        }
-                    }
-                }
-
-                // Beat buttons
-                if (adjustedY >= beatRowY && adjustedY <= beatRowY + btnSize) {
-                    for (v in 0 until TUNING_BTN_COUNT) {
-                        val bx = marginX + labelWidth + v * (btnSize + btnGap)
-                        if (x >= bx && x <= bx + btnSize) {
-                            tuningBeatSelections[tuningWeapons[i]] = v
-                            return "TUNING_BEAT:$i:$v"
-                        }
-                    }
-                }
-            }
-        }
-
-        return null
-    }
-
-    fun updateTuningScroll() {
-        if (tuningScrollVelocity != 0f) {
-            tuningScrollY += tuningScrollVelocity
-            tuningScrollVelocity *= 0.95f
-            if (Math.abs(tuningScrollVelocity) < 0.5f) tuningScrollVelocity = 0f
-            val labelWidth = 60f
-            val gridAvailWidth = screenWidth - marginX * 2 - labelWidth
-            val btnGap = 2f
-            val btnSize = ((gridAvailWidth - (TUNING_BTN_COUNT - 1) * btnGap) / TUNING_BTN_COUNT).coerceAtLeast(22f)
-            val rowHeight = btnSize + 4f
-            val blockHeight = rowHeight * 2 + 16f
-            val gridVisibleHeight = tuningGridBottom - tuningGridTop
-            val maxScroll = (tuningWeapons.size * blockHeight - gridVisibleHeight).coerceAtLeast(0f)
-            tuningScrollY = tuningScrollY.coerceIn(0f, maxScroll)
-        }
     }
 
     fun handleTap(x: Float, y: Float, state: GameState): String? {

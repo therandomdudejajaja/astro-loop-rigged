@@ -29,7 +29,8 @@ class ProjectileAoeDamageNumberTest {
         applyDamageModifiers = modifiers,
         onAsteroidDestroyed = {},
         onEnemyDestroyed = {},
-        onPlayerDeath = {}
+        onPlayerDeath = {},
+        onVolatileDetonation = { _, _, _, _ -> }
     )
 
     private fun airburst() = Projectile().apply {

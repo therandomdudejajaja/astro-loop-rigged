@@ -338,6 +338,29 @@ class HangarState(internal val persistence: PersistenceManager) {
     var audioMuteButtonRect: RectF? = null
     var vibrationMuteButtonRect: RectF? = null
 
+    // --- BELT RUN cabinet (Astro Loop only) ---
+    /** True while the full-screen cabinet overlay is up; the hangar pauses beneath it. */
+    @Volatile var cabinetOpen: Boolean = false
+
+    /** The INSERT COIN button. Occupies the slot machine's old spin-button rect. */
+    var insertCoinRect: RectF? = null
+
+    /**
+     * The CRT rect StorePageRenderer computes each frame for the bezel's attract demo.
+     * Published here so HangarSurfaceView.update() — which owns the bezel's CabinetSim/
+     * CabinetRenderer and has no other way to learn the rect's size — can build them
+     * lazily at bezel scale once it's known.
+     */
+    @Volatile var cabinetScreenRect: RectF? = null
+
+    /**
+     * The marquee plate's rect, computed each frame by StorePageRenderer the same way
+     * [cabinetScreenRect] is. Published here so HangarSurfaceView.update() — which owns
+     * the marquee's ambient drift and has no other way to learn the plate's size — can
+     * build/rebuild it lazily at plate scale. See [cabinetScreenRect]'s own doc.
+     */
+    @Volatile var cabinetMarqueeRect: RectF? = null
+
     // --- Slot readout messages (audio / vibration button feedback) ---
     // The buttons flank the machine's CRT readout, so the readout is what tells the player which
     // state a press just arrived at. A message takes the screen outright: see showReadoutMessage.
@@ -367,6 +390,13 @@ class HangarState(internal val persistence: PersistenceManager) {
     // --- First-launch intro cinematic ---
     @Volatile var introCinematic: Boolean = false   // True only during the first-ever launch intro
     @Volatile var introTitleTimer: Float = 0f        // Seconds the ASTRO LOOP title has been fading in
+    // Seconds the player has sat on the bar page without moving to the launchpad.
+    // Deliberately NOT persisted: introCinematic is derived from isIntroDone(), which is only
+    // written when the ship is actually launched, so a player who kills the app on the bar
+    // replays the whole intro — and a persisted latch would make that second attempt quieter
+    // than the first for no reason a player could understand.
+    @Volatile var introHintTimer: Float = 0f
+    @Volatile var introHintDone: Boolean = false     // The swipe hint is a one-shot
 
     // --- Launch sequence ---
     @Volatile var launchProgress: Float = 0f

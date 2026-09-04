@@ -19,6 +19,7 @@ class ProjectileEffectsSystem(
     private val onAsteroidDestroyed: (Asteroid) -> Unit,
     private val onEnemyDestroyed: (EnemyShip) -> Unit,
     private val onPlayerDeath: () -> Unit,
+    private val onVolatileDetonation: (x: Float, y: Float, radius: Float, damage: Float) -> Unit,
 ) {
 
     private fun isOnScreen(entity: Entity): Boolean {
@@ -160,6 +161,26 @@ class ProjectileEffectsSystem(
 
         // Flak, torpedo, missile, mine, bomblet, fragment, and volatile detonation explode on despawn
         if (projectile.explodeOnDeath && (projectile.type == ProjectileType.FLAK || projectile.type == ProjectileType.TORPEDO || projectile.type == ProjectileType.MISSILE || projectile.type == ProjectileType.MINE || projectile.type == ProjectileType.BOMBLET || projectile.type == ProjectileType.FRAGMENT || projectile.weaponId == "volatile_detonation")) {
+            // Volatile detonations hand off to VolatileShockwaveSystem, which damages the annulus
+            // its ring has actually crossed. Everything below this point applies damage at full
+            // radius on the frame it fires, which is right for a grenade and wrong for a shockwave
+            // the player is meant to outrun.
+            if (projectile.weaponId == "volatile_detonation") {
+                visualEffects.addExplosion(
+                    projectile.position.x,
+                    projectile.position.y,
+                    projectile.explosionRadius,
+                    0xFFFFAA44.toInt()
+                )
+                SoundManager.playSFX("sfx_explosion", volume = 0.4f)
+                onVolatileDetonation(
+                    projectile.position.x,
+                    projectile.position.y,
+                    projectile.explosionRadius,
+                    projectile.explosionDamage
+                )
+                return
+            }
             if (projectile.type == ProjectileType.FLAK) {
                 visualEffects.addFlakExplosion(
                     projectile.position.x,
@@ -243,15 +264,14 @@ class ProjectileEffectsSystem(
                 }
             }
 
-            // Enemy explosions and volatile detonations damage the player
-            if (projectile.isEnemyProjectile || projectile.weaponId == "volatile_detonation") {
+            // Enemy explosions damage the player. Volatile detonations used to be handled here
+            // too; they now return above, into VolatileShockwaveSystem.
+            if (projectile.isEnemyProjectile) {
                 val dx = ship.position.x - projectile.position.x
                 val dy = ship.position.y - projectile.position.y
                 val distSq = dx * dx + dy * dy
                 val damageRadius = projectile.explosionRadius + ship.radius
-                // Crystal powers grant volatile immunity
-                val volatileImmune = projectile.weaponId == "volatile_detonation" && state.hasCrystalPowers
-                if (distSq <= damageRadius * damageRadius && !ship.isInvulnerable && !volatileImmune) {
+                if (distSq <= damageRadius * damageRadius && !ship.isInvulnerable) {
                     ship.takeDamage(projectile.explosionDamage)
                     visualEffects.addDamageNumber(
                         ship.position.x,

@@ -1,0 +1,7 @@
+In Endless mode the Black Market's slots are replaced by BELT RUN, a vintage vector shooter you can actually play.
+
+TB-26 tells you where the launchpad is if you stall on the bar.
+
+Endless mode's asteroid belt scales better from ten minutes on.
+
+Fixed: dying on Android 9 no longer crashes, asteroids pay out once, weapon sounds keep up, evolutions keep their slot, volatile blasts land with the ring, the casino takes its cut, the launch stops buzzing, and a run survives the phone changing shape.

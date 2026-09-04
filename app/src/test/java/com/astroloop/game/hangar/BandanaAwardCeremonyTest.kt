@@ -38,8 +38,23 @@ class BandanaAwardCeremonyTest {
         }
     }
 
+    // Decision 13: the desert-town hints and Tobar's twelfth beat were deleted as signposting —
+    // the destination is already signposted, directively, in the corrupted bar chatter. These
+    // literal strings are the deleted content itself (the production symbols that held them are
+    // gone), kept here only so a regression that resurrects the text — under any symbol name —
+    // still fails these tests.
+    private val deletedDesertHints = listOf(
+        "Odd bit on the news. Some desert town. Slow day, I guess.",
+        "Same broadcast as last night. Word for word. I counted.",
+        "...You feel that? It's waiting for you, Astro."
+    )
+    private val deletedTwelfthBeat = listOf(
+        "That's the last one. All twelve of you, marked.",
+        "Commander... whatever's out there - it's here now."
+    )
+
     @Test
-    fun ceremonyAddsTobarFramingAndPilotReply() {
+    fun ceremonyAddsTobarFramingAndPilotReplyOnly() {
         persistence.addBandana("pilot_dash")          // count = 1 (< 12)
         persistence.setPendingBandanaPilot("pilot_dash")
 
@@ -53,13 +68,17 @@ class BandanaAwardCeremonyTest {
         assertTrue("Tobar framing missing", texts.any { it in LoopDefinitions.tobarBandanaFraming })
         assertTrue("Pilot reply missing",
             texts.contains(LoopDefinitions.bandanaAwardReplies["pilot_dash"]))
-        assertTrue("Guaranteed desert-town hint #1 missing",
-            texts.contains(LoopDefinitions.desertTownHints[0]))
+        // Inversion of the old signpost assertion: survived-time report + framing + reply, and
+        // nothing else appended — no extra signpost line.
+        assertEquals("Ceremony must be report + framing + reply only, no extra signpost line", 3, texts.size)
+        for (hint in deletedDesertHints) {
+            assertFalse("Desert hint must not reappear: $hint", texts.contains(hint))
+        }
         assertNull("Pending must be cleared", persistence.getPendingBandanaPilot())
     }
 
     @Test
-    fun ceremonyAddsTheScriptedHintForItsBandanaCount() {
+    fun seventhBandanaCeremonyCarriesNoDesertHint() {
         val ids = listOf(
             "pilot_medic", "pilot_rascal", "pilot_brutus", "pilot_frost",
             "pilot_dash", "pilot_ember", "pilot_fang"
@@ -71,14 +90,17 @@ class BandanaAwardCeremonyTest {
         drainConversation()
 
         val texts = state.chatMessages.map { it.text }
-        assertTrue("Hint #7 must fire after the 7th bandana",
-            texts.contains(LoopDefinitions.desertTownHints[6]))
-        assertFalse("Only the 7th hint may fire",
-            texts.any { it in LoopDefinitions.desertTownHints && it != LoopDefinitions.desertTownHints[6] })
+        assertTrue("Tobar framing missing", texts.any { it in LoopDefinitions.tobarBandanaFraming })
+        assertTrue("Pilot reply missing",
+            texts.contains(LoopDefinitions.bandanaAwardReplies["pilot_fang"]))
+        assertEquals("No hint line should ride along at any bandana count", 3, texts.size)
+        for (hint in deletedDesertHints) {
+            assertFalse("Desert hint must not reappear: $hint", texts.contains(hint))
+        }
     }
 
     @Test
-    fun twelfthBandanaUsesTheSpecialBeat() {
+    fun twelfthBandanaUsesTheSameFramingAsEveryOther() {
         val ids = listOf(
             "pilot_medic", "pilot_rascal", "pilot_brutus", "pilot_frost",
             "pilot_dash", "pilot_ember", "pilot_fang", "pilot_kraken",
@@ -91,9 +113,17 @@ class BandanaAwardCeremonyTest {
         drainConversation()
 
         val texts = state.chatMessages.map { it.text }
-        for (beat in LoopDefinitions.tobarTwelfthBandanaBeat) assertTrue("Missing beat: $beat", texts.contains(beat))
-        assertTrue("Hint #12 closes the twelfth ceremony",
-            texts.contains(LoopDefinitions.desertTownHints[11]))
+        // The bandanaCount >= 12 branch collapsed: the twelfth ceremony must still produce a
+        // Tobar/barman line, drawn from the same framing pool as every other ceremony — not
+        // silence, and not the deleted special beat.
+        assertTrue("Twelfth ceremony must still produce a Tobar line",
+            texts.any { it in LoopDefinitions.tobarBandanaFraming })
+        assertTrue("Pilot reply missing",
+            texts.contains(LoopDefinitions.bandanaAwardReplies["pilot_astro"]))
+        assertEquals("Twelfth ceremony must be report + framing + reply only, like every other", 3, texts.size)
+        for (beat in deletedTwelfthBeat) {
+            assertFalse("Twelfth-bandana special beat must not reappear: $beat", texts.contains(beat))
+        }
     }
 
     @Test

@@ -8,12 +8,10 @@ import com.astroloop.game.data.PersistenceManager
  */
 object BandanaAward {
     const val THRESHOLD_SECONDS = 600f   // 10:00 — same minute as the echo
-    const val TOTAL = 12
 
     /**
      * Award the flown pilot's bandana if they survived past 10:00 and don't
-     * already own it. Arms the return-to-bar ceremony via pending_bandana_pilot;
-     * the 12th award sets awaiting_convergence (chunk-2 handoff).
+     * already own it. Arms the return-to-bar ceremony via pending_bandana_pilot.
      * @return true iff a new bandana was awarded.
      */
     fun maybeAward(persistence: PersistenceManager, pilotId: String, survivalSeconds: Float): Boolean {
@@ -21,7 +19,6 @@ object BandanaAward {
         if (persistence.hasBandana(pilotId)) return false
         persistence.addBandana(pilotId)
         persistence.setPendingBandanaPilot(pilotId)
-        if (persistence.getBandanaCount() >= TOTAL) persistence.setAwaitingConvergence(true)
         return true
     }
 }

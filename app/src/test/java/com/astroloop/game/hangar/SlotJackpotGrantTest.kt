@@ -17,7 +17,7 @@ import org.robolectric.annotation.Config
  * level before the third reel landed, so the machine told the player the answer before it showed
  * it to them. The yen payout was always deferred to the stop; the upgrade was not.
  *
- * `roll = 0f` is below every jackpot threshold in `handleSlotSpin` (the lowest is 0.005f), so it
+ * `roll = 0f` is below every jackpot threshold in `handleSlotSpin` (the lowest is 0.001f), so it
  * forces a jackpot on any save without spinning until one turns up.
  */
 @RunWith(RobolectricTestRunner::class)

@@ -24,6 +24,10 @@ class SpawnSystem(
         /** Minutes for asteroid health to double once the ramp has started. */
         const val HEALTH_RAMP_DOUBLING_MINUTES = 4.5f
 
+        const val DAMAGE_RAMP_START_MINUTES = 8f
+        const val DAMAGE_RAMP_PER_MINUTE = 6f
+        const val DAMAGE_RAMP_MAX_BONUS = 100f
+
         fun asteroidCount(mult: Float): Int = mult.roundToInt().coerceIn(1, 3)
 
         fun asteroidSpeedFactor(survivalTime: Float, mult: Float): Float {
@@ -53,6 +57,36 @@ class SpawnSystem(
             if (minutes <= HEALTH_RAMP_START_MINUTES) return 1f
             val doublings = (minutes - HEALTH_RAMP_START_MINUTES) / HEALTH_RAMP_DOUBLING_MINUTES
             return 2f.pow(doublings)
+        }
+
+        /**
+         * Flat contact-damage bonus applied to an asteroid at spawn — **Astro Loop mode only**.
+         *
+         * The companion to [asteroidHealthFactor]. Health alone could make a run unwinnable without
+         * ever making it losable: a maxed build eventually cannot break anything, but a field of
+         * 20-damage rocks cannot finish it either, so the run just stops resolving. Damage supplies
+         * the other half of the ending.
+         *
+         * Additive and capped, where health is multiplicative and uncapped, and deliberately so:
+         * health has to outrun a damage curve that flattens, while contact damage is measured
+         * against a health pool that barely moves — 50 base plus 50 from Salvage Plate, with 50
+         * more of shield behind it. An uncapped damage ramp would just move the wall.
+         *
+         * Starts where the health ramp starts, because that is where the arithmetic breaks. At
+         * baseline 20 damage the invulnerability window allows 13.3 DPS through, while a maxed
+         * Vampiric Core heals 15 HP/s — the player cannot lose, which is what every endless-run
+         * report describes. The slope is set so a 16-minute run is genuinely hard: 68 damage a
+         * touch, about five seconds of sustained contact to die through full healing. The cap lands
+         * at minute 24.7, at 120 a touch — two touches kill a fully upgraded hull.
+         *
+         * Not applied to normal or corruption runs, which end at the ten-minute boss.
+         */
+        fun asteroidDamageBonus(survivalTime: Float, astroLoopMode: Boolean): Float {
+            if (!astroLoopMode) return 0f
+            val minutes = survivalTime / 60f
+            if (minutes <= DAMAGE_RAMP_START_MINUTES) return 0f
+            return ((minutes - DAMAGE_RAMP_START_MINUTES) * DAMAGE_RAMP_PER_MINUTE)
+                .coerceAtMost(DAMAGE_RAMP_MAX_BONUS)
         }
     }
 
@@ -120,6 +154,7 @@ class SpawnSystem(
 
         // Apply the Astro Loop endless health ramp (uncapped, no-op in every other mode)
         asteroid.scaleHealth(asteroidHealthFactor(state.survivalTime, state.astroLoopMode))
+        asteroid.damageBonus = asteroidDamageBonus(state.survivalTime, state.astroLoopMode)
 
         return asteroid
     }
@@ -236,6 +271,7 @@ class SpawnSystem(
 
             // Same ramp a fresh spawn gets — see the note on this function.
             asteroid.scaleHealth(asteroidHealthFactor(state.survivalTime, state.astroLoopMode))
+            asteroid.damageBonus = asteroidDamageBonus(state.survivalTime, state.astroLoopMode)
 
             // Brief immunity so clip weapons (SolarStorm, NovaBlast) don't instantly destroy children
             asteroid.fragmentImmunityTimer = 0.1f

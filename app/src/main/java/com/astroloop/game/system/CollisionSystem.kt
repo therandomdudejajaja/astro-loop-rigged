@@ -440,7 +440,7 @@ class CollisionSystem {
                 val collisionDist = enemy.radius + asteroid.radius
 
                 if (dist < collisionDist) {
-                    if (enemy.takeDamage(asteroid.damage)) {
+                    if (enemy.takeDamage(asteroid.getContactDamage())) {
                         destroyedEnemies.add(enemy)
                     }
                     break

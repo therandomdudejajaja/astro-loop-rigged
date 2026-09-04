@@ -70,10 +70,6 @@ object IconCache {
                 val stripped = pilotId.removePrefix("pilot_")
                 load(am, "icons/portraits/portrait_corrupted_$stripped.png", PORTRAIT_SIZE, "corrupted_$pilotId")
             }
-            for (pilotId in GHOST_IDS) {
-                val stripped = pilotId.removePrefix("pilot_")
-                load(am, "icons/portraits/portrait_ghost_$stripped.png", PORTRAIT_SIZE, "ghost_$pilotId")
-            }
             load(am, "icons/portraits/portrait_boss.png",   PORTRAIT_SIZE, "portrait_boss")
             load(am, "icons/portraits/portrait_locked.png", PORTRAIT_SIZE, "portrait_locked")
             load(am, "icons/portraits/portrait_tb26.png",          PORTRAIT_SIZE, "portrait_tb26")
@@ -125,7 +121,6 @@ object IconCache {
     fun getPortraitLocked(): Bitmap?           = bitmaps["portrait_locked"]
     fun getPortraitBoss(): Bitmap?             = bitmaps["portrait_boss"]
     fun getCorruptedPortrait(pilotId: String): Bitmap? = bitmaps["corrupted_$pilotId"]
-    fun getGhostPortrait(pilotId: String): Bitmap? = bitmaps["ghost_$pilotId"]
     fun getSlotSymbol(sym: Int): Bitmap?       = bitmaps["slot_$sym"]
     // Keys stored as "store_$upgradeId" during preload — do NOT route through storeIdToFilename here.
     // storeIdToFilename is only for building the file path during preload.
@@ -135,11 +130,10 @@ object IconCache {
     }
 
     fun getPortraitByCallsign(callsign: String?, isCorrupted: Boolean = false,
-                              bandanaPilotId: String? = null, isGhost: Boolean = false): Bitmap? {
+                              bandanaPilotId: String? = null): Bitmap? {
         if (callsign == null) return null
         val pilot = PilotDefinitions.pilots.find { it.callsign == callsign }
         return when {
-            isGhost && pilot != null -> getGhostPortrait(pilot.id) ?: getPortrait(pilot.id)
             isCorrupted && pilot != null -> getCorruptedPortrait(pilot.id)
             pilot != null && pilot.id == bandanaPilotId ->
                 getBandanaPortrait(pilot.id) ?: getPortrait(pilot.id)
@@ -188,10 +182,6 @@ object IconCache {
         "pilot_whiskers", "pilot_unit7", "pilot_havoc"
     )
 
-    // Ghost portraits exist only for the reckoning's crew voices (CrystalFightLines.ghostScript).
-    // Base art is the CORRUPTION variants, recoloured — the crystal is holding them, so they wear
-    // its mark, not their bandanas.
-    private val GHOST_IDS = listOf("pilot_medic", "pilot_dash", "pilot_brutus", "pilot_whiskers")
 
     private val STORE_IDS = listOf("health", "shields", "speed", "damage", "crit", "magnet", "yen_bonus", "salvage")
 }

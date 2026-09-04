@@ -57,8 +57,7 @@ class RadioSystem {
     }
 
     fun showScriptedMessage(state: GameState, speaker: String, text: String, color: Int,
-                            isBoss: Boolean = false, isCorrupted: Boolean = false,
-                            isGhost: Boolean = false) {
+                            isBoss: Boolean = false, isCorrupted: Boolean = false) {
         // Every radio line gets a sting: corrupted chatter its own, everything else the crackle.
         // "Everything else" is deliberately literal — it includes the desert flashback, so Tobar,
         // Astro and COMMAND's orders all come over the radio there too.
@@ -77,13 +76,9 @@ class RadioSystem {
         state.radioFadeTimer = 0f
         state.radioBoss = isBoss
         state.radioIsCorrupted = isCorrupted
-        state.radioIsGhost = isGhost
     }
 
     fun showMessage(state: GameState, speaker: String, text: String, color: Int, isCorrupted: Boolean = false) {
-        // The reckoning is fully scripted: ambient chatter dies at this single choke point so
-        // no trigger path can leak (the fight's lines travel via showScriptedMessage instead).
-        if (state.reckoningActive) return
         // Same rule as showScriptedMessage: corrupted gets its own sting, everything else the
         // crackle, both on the effects channel.
         SoundManager.playSFX(
@@ -95,7 +90,6 @@ class RadioSystem {
         state.radioTimer = DISPLAY_DURATION
         state.radioFadeTimer = FADE_DURATION
         state.radioIsCorrupted = isCorrupted
-        state.radioIsGhost = false   // ambient lines are never ghosts — never inherit a stale flag
     }
 
     // --- Always triggers (bypass cooldown for phoenix, boss, evolution) ---

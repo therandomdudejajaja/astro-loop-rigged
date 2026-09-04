@@ -232,7 +232,7 @@ object BarConversations {
             ChatMessage("UNIT-7", "The distinction is unclear.", 0xFF44EE55.toInt())
         )),
         BarConversation("pilot_medic", "pilot_unit7", listOf(
-            ChatMessage("UNIT-7", "Your heart rate elevated 12% when Astro entered.", 0xFF44EE55.toInt()),
+            ChatMessage("UNIT-7", "Your heart rate elevated 12% when the door opened.", 0xFF44EE55.toInt()),
             ChatMessage("MEDIC", "That's-- I was, uh, exercising.", 0xFFFF88AA.toInt()),
             ChatMessage("UNIT-7", "You were sitting down.", 0xFF44EE55.toInt())
         )),
@@ -1377,7 +1377,7 @@ object BarConversations {
         // ============================================================
         BarConversation("pilot_havoc", "pilot_unit7", listOf(
             ChatMessage("HAVOC", "Unit-7! Calculate how awesome that explosion was!", 0xFFBBFF22.toInt()),
-            ChatMessage("UNIT-7", "The blast radius was 47 meters. Property damage: significant.", 0xFF44EE55.toInt()),
+            ChatMessage("UNIT-7", "The blast radius was 47 meters. Damage: significant.", 0xFF44EE55.toInt()),
             ChatMessage("HAVOC", "BUT WAS IT COOL?!", 0xFFBBFF22.toInt()),
             ChatMessage("UNIT-7", "Coolness is not a measurable quantity.", 0xFF44EE55.toInt())
         )),
@@ -1779,6 +1779,72 @@ object BarConversations {
             ChatMessage("TOBAR","The bar?", 0xFF88AACC.toInt()),
             ChatMessage("ASTRO", "All of it.", 0xFFDD3333.toInt()),
             ChatMessage("TOBAR","Had a good feeling.", 0xFF88AACC.toInt())
+        ), requiresAstroLoop = true),
+
+        // ============================================================
+        // === BELT RUN CABINET (Astro Loop only) ===
+        // ============================================================
+        // Ordinary bar chatter about a real object in the room — who's good at it, who
+        // wastes yen on it, arguing over the board. No foreshadowing: the reckoning is an
+        // easter egg, not a finale, so nobody here talks about an ending.
+        BarConversation("pilot_kraken", "pilot_dash", listOf(
+            ChatMessage("DASH", "Nobody's hands are faster than mine on that stick.", 0xFFFFDD22.toInt()),
+            ChatMessage("KRAKEN", "Eight of mine disagree.", 0xFF33AAAA.toInt()),
+            ChatMessage("DASH", "That's not skill, that's cheating with tentacles!", 0xFFFFDD22.toInt()),
+            ChatMessage("KRAKEN", "They're arms. And it's called anatomy.", 0xFF33AAAA.toInt())
+        ), requiresAstroLoop = true),
+        BarConversation("pilot_fang", "pilot_brutus", listOf(
+            ChatMessage("BRUTUS", "Broke the joystick.", 0xFF77AA33.toInt()),
+            ChatMessage("FANG", "Third one this week.", 0xFF8844CC.toInt()),
+            ChatMessage("BRUTUS", "Machine's fragile.", 0xFF77AA33.toInt()),
+            ChatMessage("FANG", "You're just strong. Try losing gently.", 0xFF8844CC.toInt())
+        ), requiresAstroLoop = true),
+        BarConversation("pilot_whiskers", "pilot_rascal", listOf(
+            ChatMessage("WHISKERS", "Down eleven hundred yen on BELT RUN tonight.", 0xFFFFBB88.toInt()),
+            ChatMessage("RASCAL", "Rookie numbers. I'm down triple that.", 0xFFDDAA33.toInt()),
+            ChatMessage("WHISKERS", "At least my losses look elegant.", 0xFFFFBB88.toInt()),
+            ChatMessage("RASCAL", "Mine look like a tax return.", 0xFFDDAA33.toInt())
+        ), requiresAstroLoop = true),
+        BarConversation("pilot_medic", "pilot_ember", listOf(
+            ChatMessage("MEDIC", "You spent your whole paycheck on BELT RUN.", 0xFFFF88AA.toInt()),
+            ChatMessage("EMBER", "The high score called. I had to answer.", 0xFFFF6622.toInt()),
+            ChatMessage("MEDIC", "With every yen you own, apparently.", 0xFFFF88AA.toInt()),
+            ChatMessage("EMBER", "Passion isn't cheap, Medic.", 0xFFFF6622.toInt())
+        ), requiresAstroLoop = true),
+        BarConversation("pilot_unit7", "pilot_havoc", listOf(
+            ChatMessage("UNIT-7", "You are on the board once. Only once.", 0xFF44EE55.toInt()),
+            ChatMessage("HAVOC", "TWICE! You missed the one in the corner!", 0xFFBBFF22.toInt()),
+            ChatMessage("UNIT-7", "That one is unreadable static, not letters.", 0xFF44EE55.toInt()),
+            ChatMessage("HAVOC", "STILL COUNTS!", 0xFFBBFF22.toInt())
+        ), requiresAstroLoop = true),
+        BarConversation("pilot_frost", "pilot_astro", listOf(
+            ChatMessage("ASTRO", "You play that machine? I've never seen you at it.", 0xFFDD3333.toInt()),
+            ChatMessage("FROST", "Me. I play during your late-night briefings.", 0xFF55BBFF.toInt()),
+            ChatMessage("ASTRO", "You're always so quiet about everything.", 0xFFDD3333.toInt()),
+            ChatMessage("FROST", "Quiet is how you hear the next wave coming.", 0xFF55BBFF.toInt())
+        ), requiresAstroLoop = true),
+        BarConversation("pilot_whiskers", "pilot_frost", listOf(
+            ChatMessage("WHISKERS", "Everything I do on that machine is luck.", 0xFFFFBB88.toInt()),
+            ChatMessage("FROST", "Luck doesn't thread a rock field backwards.", 0xFF55BBFF.toInt()),
+            ChatMessage("WHISKERS", "It does when the luck is THIS good.", 0xFFFFBB88.toInt()),
+            ChatMessage("FROST", "That's skill wearing a costume.", 0xFF55BBFF.toInt())
+        ), requiresAstroLoop = true),
+
+        // === TB + WHISKERS — BELT RUN (Astro Loop only) ===
+        // Tobar half-remembers what the cabinet used to be. He is not sure, a pilot tells
+        // him he's wrong, and he lets it go — the player is left as the only one who knows
+        // he's right.
+        BarConversation("tb26", "pilot_whiskers", listOf(
+            ChatMessage("TOBAR", "That cabinet used to be something else. I think.", 0xFF88AACC.toInt()),
+            ChatMessage("WHISKERS", "It's always been BELT RUN. Always has.", 0xFFFFBB88.toInt()),
+            ChatMessage("TOBAR", "...must be thinking of somewhere else.", 0xFF88AACC.toInt())
+        ), requiresAstroLoop = true),
+
+        // === TB + FROST — BELT RUN (Astro Loop only) ===
+        BarConversation("tb26", "pilot_frost", listOf(
+            ChatMessage("TOBAR", "I keep almost remembering that cabinet.", 0xFF88AACC.toInt()),
+            ChatMessage("FROST", "It's always been this. You just think too much.", 0xFF55BBFF.toInt()),
+            ChatMessage("TOBAR", "...fair.", 0xFF88AACC.toInt())
         ), requiresAstroLoop = true),
 
         // ============================================================
@@ -2424,6 +2490,26 @@ object BarConversations {
         // === END MULTI-WAY CONVERSATIONS ===
     )
 
+    /**
+     * internal: the seam BarConversationSpoilerTest reads. A conversation is gated on its
+     * participants, so the only way a line can outrun that gate is by naming someone who is not in
+     * it — which is not visible from any public accessor.
+     */
+    internal val allConversations: List<BarConversation> get() = conversations
+
+    /**
+     * Built at runtime, so **`BarConversationSpoilerTest` cannot see it.**
+     *
+     * That test walks [allConversations] and fails any line naming a pilot who is not one of the
+     * conversation's participants — the shape that let Unit-7 spoil Astro's existence to players
+     * who had never met him. This conversation is assembled here instead of living in that list,
+     * and it puts a UNIT-7 line into a Rascal + Brutus scene, which is exactly what the test
+     * exists to catch.
+     *
+     * It is safe only because its single caller, `ChatSystem.onAstroLoopFirstEntry`, is gated to
+     * Astro Loop, by which point every pilot has been recruited and nothing can be spoiled. **If
+     * that gate ever moves earlier, this becomes a spoiler and no test will tell you.**
+     */
     fun getShieldDiscoveryConversation(): BarConversation? {
         val rascal = PilotDefinitions.getPilot("pilot_rascal") ?: return null
         val unit7 = PilotDefinitions.getPilot("pilot_unit7") ?: return null

@@ -2,7 +2,7 @@
 <!--
   Release builds run with isShrinkResources = true. SoundManager resolves every clip
   through resources.getIdentifier(name, "raw", packageName) — some names are built at
-  runtime — so none of the 71 oggs are visible to static analysis. AGP currently detects
+  runtime — so none of the 79 oggs are visible to static analysis. AGP currently detects
   getIdentifier and falls back to conservative safe mode, which is the only reason 1.0
   shipped with its audio intact; an AGP bump could withdraw that and strip the lot.
   The failure is silent (getIdentifier returns 0, no crash, no log), so keep this explicit.

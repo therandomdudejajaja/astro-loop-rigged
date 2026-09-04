@@ -24,10 +24,17 @@ enum class AsteroidSize {
 
 class Asteroid : Entity() {
 
+    companion object {
+        /** Contact damage before the Astro Loop ramp. */
+        const val BASE_CONTACT_DAMAGE = 20f
+    }
+
     var type: AsteroidType = AsteroidType.ROCK
     var size: AsteroidSize = AsteroidSize.LARGE
     var shapePoints: FloatArray = FloatArray(0)
-    var damage: Float = 20f
+    var damage: Float = BASE_CONTACT_DAMAGE
+    /** Astro Loop damage ramp, applied at spawn. See SpawnSystem.asteroidDamageBonus. */
+    var damageBonus: Float = 0f
     var fragmentImmunityTimer: Float = 0f
 
     data class TrailPoint(val x: Float, val y: Float, val timestamp: Float)
@@ -56,7 +63,20 @@ class Asteroid : Entity() {
         AsteroidSize.SMALL -> 3f
     }
 
-    fun getTrailDamage(): Float = when (size) {
+    /** Contact damage including the Astro Loop ramp — the number the ship actually takes. */
+    fun getContactDamage(): Float = damage + damageBonus
+
+    /**
+     * How much harder this asteroid hits than a baseline one — 1.0 before the Astro Loop ramp.
+     *
+     * Trail wakes and volatile blasts scale by this rather than by [damageBonus] directly. A flat
+     * bonus would add the same number to a SMALL fragment's 3-damage wake as to a LARGE's 15,
+     * flattening the size ordering the player reads the field by — at minute 16 they would be 51
+     * and 63, all but identical. Proportional keeps a small rock small.
+     */
+    fun getDamageScale(): Float = getContactDamage() / BASE_CONTACT_DAMAGE
+
+    fun getTrailDamage(): Float = getDamageScale() * when (size) {
         AsteroidSize.LARGE -> 15f
         AsteroidSize.MEDIUM -> 8f
         AsteroidSize.SMALL -> 3f
@@ -156,6 +176,23 @@ class Asteroid : Entity() {
         health = maxHealth
     }
 
+    /**
+     * Claim this asteroid's destruction, once and only once.
+     *
+     * `CollisionSystem` gathers every hit for the frame before any damage is applied, and
+     * `takeDamage` reports `health <= 0` rather than "died on this call" — so a piercing volley,
+     * a saw's per-entity ticks, or two damage systems in the same frame all see the same rock as
+     * freshly destroyed. Each redundant destruction used to run the full loot path: two more
+     * fragments, a yen pickup, and a drop roll.
+     *
+     * @return true for the caller that actually destroyed it, false for everyone after.
+     */
+    fun claimDestruction(): Boolean {
+        if (!isActive) return false
+        isActive = false
+        return true
+    }
+
     fun shouldSplit(): Boolean {
         return size != AsteroidSize.SMALL && type != AsteroidType.VOLATILE
     }
@@ -185,7 +222,7 @@ class Asteroid : Entity() {
 
     fun getExplosionDamage(): Float {
         return if (type == AsteroidType.VOLATILE) {
-            damage * 1.5f
+            getContactDamage() * 1.5f
         } else {
             0f
         }
@@ -222,5 +259,7 @@ class Asteroid : Entity() {
         trailPoints.clear()
         lastTrailTime = 0f
         fragmentImmunityTimer = 0f
+        damage = BASE_CONTACT_DAMAGE
+        damageBonus = 0f
     }
 }

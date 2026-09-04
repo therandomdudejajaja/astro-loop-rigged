@@ -103,8 +103,14 @@ class VampiricLeecherSystemTest {
 
     @Test
     fun `asteroid killed by leech triggers callback`() {
+        // The system no longer deactivates the asteroid itself (see VampiricTargetCapTest /
+        // Asteroid.claimDestruction) - that's the callback's job, mirroring production's
+        // handleAsteroidDestroyedWithTrail, so this fake callback claims it too.
         var callbackAsteroid: Asteroid? = null
-        val sys = VampiricLeecherSystem(onAsteroidDestroyed = { callbackAsteroid = it })
+        val sys = VampiricLeecherSystem(onAsteroidDestroyed = {
+            callbackAsteroid = it
+            it.claimDestruction()
+        })
         state.addPassive("vampiric_core")
         val asteroid = inRangeAsteroid().apply { health = 0.05f }
         sys.update(ship, listOf(asteroid), state, 0.21f)

@@ -127,19 +127,6 @@ class LoopDefinitionsTest {
     }
 
     @Test
-    fun `desert town hints script all 12 bandanas in order and fit the chat column`() {
-        assertEquals(12, LoopDefinitions.desertTownHints.size)
-        for ((i, line) in LoopDefinitions.desertTownHints.withIndex()) {
-            assertTrue("hint ${i + 1}: '$line' is ${line.length} chars (limit 58)", line.length <= 58)
-        }
-        for (c in 1..12) {
-            assertEquals(LoopDefinitions.desertTownHints[c - 1], LoopDefinitions.desertHintForBandana(c))
-        }
-        assertNull(LoopDefinitions.desertHintForBandana(0))
-        assertNull(LoopDefinitions.desertHintForBandana(13))
-    }
-
-    @Test
     fun `empReactionLines covers all 12 pilots and fits the HUD`() {
         val expected = listOf(
             "pilot_astro", "pilot_medic", "pilot_rascal", "pilot_brutus", "pilot_frost",
