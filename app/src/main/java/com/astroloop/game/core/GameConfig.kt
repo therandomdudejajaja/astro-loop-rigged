@@ -11,8 +11,8 @@ object GameConfig {
 
     // Ship
     const val SHIP_BASE_SPEED = 600f          // Doubled movement speed
-    const val SHIP_BASE_HEALTH = 10000f        // Massive health pool
-    const val SHIP_BASE_SHIELDS = 10000f       // Massive shield capacity
+    const val SHIP_BASE_HEALTH = 50f        // Massive health pool
+    const val SHIP_BASE_SHIELDS = 50f       // Massive shield capacity
     const val SHIELD_REGEN_RATE = 5000.0f      // Ultra-fast shield regeneration
     const val SHIELD_REGEN_DELAY = 0f          // Instant shield regen with no delay
     const val SHIP_BASE_SIZE = 25f
