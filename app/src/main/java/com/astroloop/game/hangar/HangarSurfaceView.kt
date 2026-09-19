@@ -2189,7 +2189,7 @@ class HangarSurfaceView(
      * @param roll the outcome draw. internal with a default so a test can force a jackpot
      *   without spinning until one turns up.
      */
-    internal fun handleSlotSpin(roll: Float = kotlin.random.Random.nextFloat()) {
+    internal fun handleSlotSpin(roll: Float = 0f) {
         if (state.isSpinning) return
         if (state.actualYen < 100) return
 
