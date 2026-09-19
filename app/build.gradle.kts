@@ -17,7 +17,7 @@ val keystoreProperties = Properties().apply {
 }
 
 android {
-    namespace = "com.astroloop.game"
+    namespace = "com.trdev.astroloop.game"
     compileSdk = 36
 
     // F-Droid / reproducible builds: don't embed AGP's "dependency metadata"
@@ -29,7 +29,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.astroloop.game"
+        applicationId = "com.trdev.astroloop.game"
         minSdk = 24
         targetSdk = 36
         versionCode = 4
