@@ -100,7 +100,7 @@ class Ship : Entity(), Firer {
         timeSinceLastDamage = 0f
         healthBarTimer = 2f  // Show health bar for 2 seconds
 
-        var remainingDamage = (amount * 0.01f)
+        var remainingDamage = amount
 
         // Apply damage to shields first
         if (currentShield > 0f) {
@@ -118,6 +118,9 @@ class Ship : Entity(), Firer {
                 return true  // Ship destroyed
             }
         }
+
+        // Grant momentary post-hit invulnerability so you don't instantly melt in 1 tick
+        makeInvulnerable()
 
         return false
     }
