@@ -100,14 +100,13 @@ class Ship : Entity(), Firer {
         timeSinceLastDamage = 0f
         healthBarTimer = 2f  // Show health bar for 2 seconds
 
-        var remainingDamage = amount * 0.01
+        var remainingDamage = (amount * 0.01f)
 
         // Apply damage to shields first
         if (currentShield > 0f) {
             val shieldDamage = minOf(currentShield, remainingDamage)
             currentShield -= shieldDamage
             remainingDamage -= shieldDamage
-
         }
 
         // Bleed through to health
