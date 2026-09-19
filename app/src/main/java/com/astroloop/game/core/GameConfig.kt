@@ -34,7 +34,7 @@ object GameConfig {
     const val ASTEROID_MIN_SPAWN_RATE = 0.3f
 
     // Power-ups & Economy
-    const val POWERUP_DROP_CHANCE = 1.0f       // Guaranteed powerup drop chance
+    const val POWERUP_DROP_CHANCE = 0.3f       // Guaranteed powerup drop chance
     const val YEN_BASE_RATE = 100.0f           // 100x Currency earnings
     const val SALVAGE_BASE_RATE = 100.0f       // 100x Salvage earnings
     const val POWERUP_SIZE = 20f
@@ -66,8 +66,8 @@ object GameConfig {
     const val DIFFICULTY_HEALTH_INCREASE = 0.05f
 
     // Weapons & Passives (Infinite potential)
-    const val WEAPON_MAX_LEVEL = 999999
-    const val PASSIVE_MAX_STACKS = 999999
+    const val WEAPON_MAX_LEVEL = 128
+    const val PASSIVE_MAX_STACKS = 128
 
     // Upgrade slots
     const val MAX_WEAPON_SLOTS = 12
@@ -123,19 +123,19 @@ object GameConfig {
     const val CRIT_DAMAGE_MULTIPLIER = 10.0f  // 10x damage on critical hits
 
     // Upgrade drop rate limits (Cooldowns removed for rapid drops)
-    const val ASTEROID_UPGRADE_DROP_COOLDOWN = 0f
-    const val ASTEROID_UPGRADE_EARLY_COOLDOWN = 0f
+    const val ASTEROID_UPGRADE_DROP_COOLDOWN = 35f
+    const val ASTEROID_UPGRADE_EARLY_COOLDOWN = 12f
 
     // Early game upgrade drop scaling
-    const val ASTEROID_UPGRADE_DROP_INITIAL = 1.0f
-    const val ASTEROID_UPGRADE_DROP_BASELINE = 1.0f
-    const val ASTEROID_UPGRADE_DROP_DECREASE = 0f
+    const val ASTEROID_UPGRADE_DROP_INITIAL = 0.10f
+    const val ASTEROID_UPGRADE_DROP_BASELINE = 0.02f
+    const val ASTEROID_UPGRADE_DROP_DECREASE = 0.01f
 
     // Astro Loop mode drop rates
-    const val ASTRO_LOOP_UPGRADE_DROP_COOLDOWN = 0f
-    const val ASTRO_LOOP_UPGRADE_EARLY_COOLDOWN = 0f
-    const val ASTRO_LOOP_UPGRADE_DROP_INITIAL = 1.0f
-    const val ASTRO_LOOP_UPGRADE_DROP_BASELINE = 1.0f
+    const val ASTRO_LOOP_UPGRADE_DROP_COOLDOWN = 20f
+    const val ASTRO_LOOP_UPGRADE_EARLY_COOLDOWN = 14f
+    const val ASTRO_LOOP_UPGRADE_DROP_INITIAL = 0.10f
+    const val ASTRO_LOOP_UPGRADE_DROP_BASELINE = 0.05f
 
     fun formatYen(amount: Int): String {
         return when {
