@@ -36,7 +36,11 @@ class UpgradeSystem(
         val options = mutableListOf<UpgradeOption>()
         val selected = mutableSetOf<String>()
 
-        // Fully upgraded check disabled to allow infinite leveling
+        // Check if fully upgraded to level/stack limits
+        if (state.isFullyUpgraded()) {
+            pendingOptions = emptyList()
+            return emptyList()
+        }
 
         // Passives that can only be picked once
         val oneTimePassives = setOf("phoenix_core", "extra_weapon_slot", "glass_cannon", "duplicator_core", "lucky_star")
@@ -50,11 +54,11 @@ class UpgradeSystem(
         val ownedWeaponCount = state.weaponLevels.count { it.value > 0 }
         val gatedWeapons = mutableListOf<UpgradeOption>()
 
-        // Categorize weapons (Unlimited leveling)
+        // Categorize weapons (Capped at WEAPON_MAX_LEVEL)
         for (weaponDef in WeaponDefinitions.getBaseWeapons()
             .filter { it.id in unlockedWeaponIds && !state.hasEvolutionOf(it.id) }) {
             val currentLevel = state.getWeaponLevel(weaponDef.id)
-            if (currentLevel > 0) {
+            if (currentLevel in 1..<GameConfig.WEAPON_MAX_LEVEL) {
                 val hardGateMet = ownedWeaponCount >= currentLevel
                 val softGatePasses = hardGateMet ||
                     Random.nextFloat() < ownedWeaponCount.toFloat() / currentLevel.toFloat()
@@ -63,16 +67,17 @@ class UpgradeSystem(
                 } else {
                     gatedWeapons.add(UpgradeOption(weaponDef.id, isWeapon = true))
                 }
-            } else if (state.canAddNewWeapon()) {
+            } else if (currentLevel == 0 && state.canAddNewWeapon()) {
                 newWeapons.add(UpgradeOption(weaponDef.id, isWeapon = true))
             }
         }
 
-        // Categorize passives (Unlimited leveling)
+        // Categorize passives (Capped at PASSIVE_MAX_STACKS)
         for (passiveDef in PassiveDefinitions.getAllPassives().filter { it.id in unlockedPassiveIds }) {
             val currentStacks = state.getPassiveStacks(passiveDef.id)
 
-            // Skip one-time passives if already owned
+            // Skip maxed passives or one-time passives
+            if (currentStacks >= GameConfig.PASSIVE_MAX_STACKS) continue
             if (passiveDef.id in oneTimePassives && currentStacks > 0) continue
             if (passiveDef.id == "extra_weapon_slot" && state.hasExtraWeaponSlot) continue
 
@@ -216,7 +221,7 @@ class UpgradeSystem(
         for (weaponDef in WeaponDefinitions.getBaseWeapons()
             .filter { it.id in unlockedWeaponIds && !state.hasEvolutionOf(it.id) }) {
             val currentLevel = state.getWeaponLevel(weaponDef.id)
-            if (currentLevel >= 1) {
+            if (currentLevel in 1..<GameConfig.WEAPON_MAX_LEVEL) {
                 eligible.add(UpgradeOption(weaponDef.id, isWeapon = true))
             }
         }
@@ -247,12 +252,14 @@ class UpgradeSystem(
 
         val itemId = if (isWeapon) {
             val validWeapons = WeaponDefinitions.getBaseWeapons().filter {
-                it.id in unlockedWeaponIds && !state.hasEvolutionOf(it.id)
+                it.id in unlockedWeaponIds && !state.hasEvolutionOf(it.id) &&
+                state.getWeaponLevel(it.id) < GameConfig.WEAPON_MAX_LEVEL
             }
             validWeapons.randomOrNull()?.id
         } else {
             val validPassives = PassiveDefinitions.getAllPassives().filter { 
-                it.id in unlockedPassiveIds
+                it.id in unlockedPassiveIds &&
+                state.getPassiveStacks(it.id) < GameConfig.PASSIVE_MAX_STACKS
                 && !(it.id == "combat_drone" && state.activePilotId == PassiveDefinitions.ASTRO_PILOT_ID)
                 && !(it.id == "tb26" && state.activePilotId != PassiveDefinitions.ASTRO_PILOT_ID) 
             }
@@ -288,7 +295,9 @@ class UpgradeSystem(
 
         for (weaponDef in WeaponDefinitions.getBaseWeapons()
             .filter { it.id in unlockedWeaponIds && !state.hasEvolutionOf(it.id) }) {
-            candidates.add(UpgradeOption(weaponDef.id, isWeapon = true))
+            if (state.getWeaponLevel(weaponDef.id) < GameConfig.WEAPON_MAX_LEVEL) {
+                candidates.add(UpgradeOption(weaponDef.id, isWeapon = true))
+            }
         }
 
         candidates.shuffle()
@@ -309,7 +318,7 @@ class UpgradeSystem(
         for (weaponDef in WeaponDefinitions.getBaseWeapons()
             .filter { it.id in unlockedWeaponIds && !state.hasEvolutionOf(it.id) }) {
             val currentLevel = state.getWeaponLevel(weaponDef.id)
-            if (currentLevel > 0 || state.canAddNewWeapon()) {
+            if (currentLevel < GameConfig.WEAPON_MAX_LEVEL && (currentLevel > 0 || state.canAddNewWeapon())) {
                 available.add(UpgradeOption(weaponDef.id, isWeapon = true))
             }
         }
@@ -317,6 +326,7 @@ class UpgradeSystem(
         for (passiveDef in PassiveDefinitions.getAllPassives().filter { it.id in unlockedPassiveIds }) {
             val currentStacks = state.getPassiveStacks(passiveDef.id)
 
+            if (currentStacks >= GameConfig.PASSIVE_MAX_STACKS) continue
             if (passiveDef.id in oneTimePassives && currentStacks > 0) continue
             if (passiveDef.id == "extra_weapon_slot" && state.hasExtraWeaponSlot) continue
 
