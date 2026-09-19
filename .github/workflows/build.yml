@@ -20,7 +20,7 @@ jobs:
         distribution: 'temurin'
 
     - name: Setup Gradle Cache
-      uses: gradle/gradle-build-action@v3
+      uses: gradle/actions/setup-gradle@v3
 
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
@@ -28,15 +28,8 @@ jobs:
     - name: Build Debug APK
       run: ./gradlew assembleDebug
 
-    - name: Rename APK Output
-      run: |
-        mkdir -p output
-        cp android/build/outputs/apk/debug/android-debug.apk output/AstroLoop-MODDED.apk || \
-        cp app/build/outputs/apk/debug/app-debug.apk output/AstroLoop-MODDED.apk
-
-    - name: Upload Modded APK
+    - name: Upload APK Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: AstroLoop-modded-Build
-        path: output/AstroLoop-modded.apk
-        retention-days: 7
+        name: AstroLoop-modded-APK
+        path: app/build/outputs/apk/**/*.apk
